@@ -1,7 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const path = require('path');
-const { pool, initSchema } = require('./db');
+const { pool, initSchemaWithRetry } = require('./db');
 
 const app = express();
 app.use(express.static(path.join(__dirname, '..', 'public')));
@@ -43,7 +43,7 @@ app.get('/api/stats', async (req, res) => {
 
 const port = process.env.PORT || 3000;
 
-initSchema()
+initSchemaWithRetry()
   .then(() => {
     app.listen(port, () => console.log(`Dashboard listening on port ${port}`));
   })

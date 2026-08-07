@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { pool, initSchema, insertMentions } = require('./db');
+const { pool, initSchemaWithRetry, insertMentions } = require('./db');
 const reddit = require('./sources/reddit');
 const youtube = require('./sources/youtube');
 const serp = require('./sources/serpSearch');
@@ -20,7 +20,7 @@ const SOURCES = [
 // content posted since the last run, or seen in search results for the
 // first time, ever lands in the table.
 async function run() {
-  await initSchema();
+  await initSchemaWithRetry();
   const sinceDate = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
   let total = 0;

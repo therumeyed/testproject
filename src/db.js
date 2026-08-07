@@ -37,6 +37,22 @@ async function initSchema() {
   `);
 }
 
+// On a fresh Blueprint deploy the DB, web service, and cron job are all
+// created together, so the DB can still be spinning up when a service makes
+// its first connection -- retry instead of crashing on that first attempt.
+async function initSchemaWithRetry(maxAttempts = 10, delayMs = 3000) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await initSchema();
+      return;
+    } catch (err) {
+      if (attempt === maxAttempts) throw err;
+      console.warn(`[db] schema init attempt ${attempt}/${maxAttempts} failed (${err.message}), retrying in ${delayMs}ms...`);
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
+}
+
 // ON CONFLICT DO NOTHING preserves first_seen_at from the original insert,
 // which is what makes "first time we saw it" dedupe work across daily runs.
 async function insertMentions(mentions) {
@@ -63,4 +79,4 @@ async function insertMentions(mentions) {
   return inserted;
 }
 
-module.exports = { pool, initSchema, insertMentions };
+module.exports = { pool, initSchema, initSchemaWithRetry, insertMentions };
