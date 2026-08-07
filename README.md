@@ -7,16 +7,21 @@ Tracks mentions of "Melbourne Airport" and stores them in Postgres, refreshed on
 | Reddit | Posts (not comments — no scraper here gets full-text search of arbitrary comments either) | Apify token |
 | YouTube | Videos matching the search term | Apify token |
 | Web / Facebook / Instagram / LinkedIn search | Public, Google-indexed posts/pages matching `site:facebook.com`, `site:instagram.com`, `site:linkedin.com`, and general web results | Apify token |
+| Facebook (direct) | Public posts whose text matches the search phrase, found via Facebook's own search (logged-out) | Apify token |
+| Instagram (hashtag) | Public posts tagged with the configured hashtag(s) — Instagram has no free-text post search, hashtag is the closest real capability | Apify token |
 | Facebook (MelAir's own Page) | All comments on MelAir's own Facebook posts | Page access token from MelAir |
 | Instagram (MelAir's own account) | All comments on MelAir's own Instagram posts | Business account access token from MelAir |
 
 Reddit, YouTube, and the search sources run through [Apify](https://apify.com) actors (third-party scrapers) rather than each platform's own official API. Worth knowing: these are community-maintained scrapers, not a versioned platform contract — the specific actor an integration uses could get renamed, change its input/output fields, or be deprecated by its maintainer with little notice. Each actor ID is a one-line env var override (see §2) precisely so a swap doesn't require touching the ingestion pipeline, just the field-mapping in that one source file if the replacement's output shape differs. If a source suddenly starts returning zero results, check the actor's Apify Store page first.
 
+**On the direct Facebook/Instagram sources specifically:** these scrape the platforms directly rather than going through Google's index or an official API. Legally this is on firmer ground than it used to be — *Meta v. Bright Data* (Jan 2024) found Meta's Terms only bind an actively logged-in account, so logged-out scraping of public data (how these actors work — no login) isn't a contract breach; Meta dropped the case and waived appeal. That's one court's ruling, not a blanket guarantee, and it doesn't stop Meta from blocking or rate-limiting at the technical level. In practice, expect these two to be the **least reliable** sources in the pipeline — Meta runs some of the most aggressive anti-bot defenses of any platform, and open-ended keyword/hashtag search is the most fragile category of request (versus scraping one known Page or post). Runs may come back empty or partial sometimes; that's expected, not necessarily broken.
+
 **Only new content is ever stored.** Each daily run looks at roughly the last 24 hours; nothing is backfilled. Search-engine results are deduped by URL, so once we've stored a link it won't reappear even if it keeps showing up in later searches — matching "first time we saw it" rather than "when it was actually posted" for sources where Google doesn't reliably expose a post date.
 
 ## What this does *not* cover (by platform policy, not something more dev time fixes)
 - Comments on **other people's or other Pages'** Facebook/Instagram/LinkedIn posts about the airport — only MelAir's own posts are reachable for comment-level data.
-- Instagram/Facebook/LinkedIn posts from personal (non-professional) accounts — search engines mostly only index Pages and professional/business accounts.
+- Instagram posts that mention the airport in text/caption but aren't tagged with a tracked hashtag — there's no free-text post search on Instagram to fall back on.
+- LinkedIn posts from personal (non-professional) accounts — only what Google has indexed, which skews toward Pages/professional content.
 - Anything older than when this dashboard went live — by design, per your "no old data" requirement.
 
 ## 1. Local setup
@@ -32,12 +37,14 @@ You need a local or hosted Postgres instance for `DATABASE_URL`. Tables are crea
 
 ## 2. Getting each API key
 
-**Apify** (powers Reddit, YouTube, and all the `site:` searches) — sign up at https://apify.com, go to Settings → Integrations, copy the API token → put it in `APIFY_TOKEN`. Apify bills per actor run (compute + result volume); at one keyword checked once a day across 3 actors this should land in the low tens of dollars a month, but check current pricing on each actor's Store page before committing — community actor pricing isn't fixed the way an official API's is.
+**Apify** (powers Reddit, YouTube, all the `site:` searches, and the direct Facebook/Instagram sources) — sign up at https://apify.com, go to Settings → Integrations, copy the API token → put it in `APIFY_TOKEN`. One token covers all five actors. Apify bills per actor run (compute + result volume); at one keyword/hashtag checked once a day this should land in the low tens of dollars a month, but check current pricing on each actor's Store page before committing — community actor pricing isn't fixed the way an official API's is, and the Facebook search actor specifically caps free-tier results at 20/run (see its Store page for paid tiers).
 
-Default actors used (overridable via `APIFY_REDDIT_ACTOR_ID`, `APIFY_YOUTUBE_ACTOR_ID`, `APIFY_GOOGLE_SEARCH_ACTOR_ID` — see `.env.example`):
+Default actors used (overridable via `APIFY_REDDIT_ACTOR_ID`, `APIFY_YOUTUBE_ACTOR_ID`, `APIFY_GOOGLE_SEARCH_ACTOR_ID`, `APIFY_FACEBOOK_ACTOR_ID`, `APIFY_INSTAGRAM_ACTOR_ID` — see `.env.example`):
 - Reddit: [`trudax/reddit-scraper`](https://apify.com/trudax/reddit-scraper)
 - YouTube: [`streamers/youtube-scraper`](https://apify.com/streamers/youtube-scraper)
-- Google search: [`apify/google-search-scraper`](https://apify.com/apify/google-search-scraper) (official Apify actor, not a community one — the most stable of the three)
+- Google search: [`apify/google-search-scraper`](https://apify.com/apify/google-search-scraper) (official Apify actor, not a community one — the most stable of the five)
+- Facebook direct search: [`scrapeforge/facebook-search-posts`](https://apify.com/scrapeforge/facebook-search-posts)
+- Instagram hashtag search: [`instaprism/instagram-hashtag-posts`](https://apify.com/instaprism/instagram-hashtag-posts) — set `APIFY_INSTAGRAM_HASHTAGS` (comma-separated, no `#`) to whichever hashtags are actually worth tracking; it defaults to a slugified `SEARCH_QUERY` (`melbourneairport`) if unset, which may not match what people actually tag posts with.
 
 **Facebook (MelAir's own Page comments)** — this needs someone who administers MelAir's Facebook Page. Steps to hand to the MelAir team:
 1. In [Meta Business Suite](https://business.facebook.com/) → Business Settings, add the developer (you) as a **Partner** with access to the Page, or create a **System User** with access to the Page if MelAir already uses Business Manager.

@@ -3,6 +3,8 @@ const { pool, initSchemaWithRetry, insertMentions } = require('./db');
 const reddit = require('./sources/reddit');
 const youtube = require('./sources/youtube');
 const serp = require('./sources/serpSearch');
+const facebookSearch = require('./sources/facebookSearch');
+const instagramSearch = require('./sources/instagramSearch');
 const facebookOwned = require('./sources/facebookOwned');
 const instagramOwned = require('./sources/instagramOwned');
 
@@ -10,6 +12,8 @@ const SOURCES = [
   { name: 'reddit', fetch: reddit.fetchMentions },
   { name: 'youtube', fetch: youtube.fetchMentions },
   { name: 'serp', fetch: serp.fetchMentions },
+  { name: 'facebook_direct', fetch: facebookSearch.fetchMentions },
+  { name: 'instagram_direct', fetch: instagramSearch.fetchMentions },
   { name: 'facebook_own', fetch: facebookOwned.fetchMentions },
   { name: 'instagram_own', fetch: instagramOwned.fetchMentions }
 ];
