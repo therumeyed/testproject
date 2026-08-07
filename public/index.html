@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Melbourne Airport Mentions</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+  :root {
+    --bg: #f8fafc;
+    --panel: #ffffff;
+    --border: #e2e8f0;
+    --text: #0f172a;
+    --muted: #64748b;
+    --accent: #2563eb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0b1220;
+      --panel: #131b2c;
+      --border: #223049;
+      --text: #e5edf9;
+      --muted: #93a4bd;
+      --accent: #5b8cff;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+  }
+  header {
+    padding: 24px 32px 8px;
+  }
+  header h1 { margin: 0 0 4px; font-size: 22px; }
+  header p { margin: 0; color: var(--muted); font-size: 14px; }
+  main { padding: 16px 32px 48px; max-width: 1200px; margin: 0 auto; }
+
+  .tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 12px;
+    margin: 16px 0 24px;
+  }
+  .tile {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+  }
+  .tile .value { font-size: 26px; font-weight: 600; }
+  .tile .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+    margin-bottom: 24px;
+  }
+  .panel h2 { margin: 0 0 12px; font-size: 15px; }
+  .chart-wrap { position: relative; height: 260px; }
+
+  .controls { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
+  select {
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 13px;
+  }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; text-transform: uppercase; }
+  td.source { white-space: nowrap; }
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    color: white;
+    white-space: nowrap;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .empty { color: var(--muted); padding: 24px; text-align: center; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Melbourne Airport Mentions</h1>
+  <p>Reddit, YouTube, web/Facebook/Instagram/LinkedIn search results, and MelAir's own Facebook/Instagram comments. Updated daily.</p>
+</header>
+<main>
+  <div class="tiles" id="tiles"></div>
+
+  <div class="panel">
+    <h2>Mentions per day by source</h2>
+    <div class="chart-wrap"><canvas id="chart"></canvas></div>
+  </div>
+
+  <div class="panel">
+    <div class="controls">
+      <h2 style="margin:0; flex:1;">Recent mentions</h2>
+      <select id="sourceFilter">
+        <option value="">All sources</option>
+      </select>
+      <select id="daysFilter">
+        <option value="7">Last 7 days</option>
+        <option value="14" selected>Last 14 days</option>
+        <option value="30">Last 30 days</option>
+      </select>
+    </div>
+    <table id="table">
+      <thead>
+        <tr><th>Source</th><th>First seen</th><th>Title / snippet</th><th>Author</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <div class="empty" id="empty" style="display:none;">No mentions in this window yet.</div>
+  </div>
+</main>
+
+<script>
+const SOURCE_META = {
+  reddit:            { label: 'Reddit',              color: '#ea580c' },
+  youtube:           { label: 'YouTube',              color: '#dc2626' },
+  facebook_search:   { label: 'Facebook (search)',    color: '#2563eb' },
+  instagram_search:  { label: 'Instagram (search)',   color: '#7c3aed' },
+  linkedin_search:   { label: 'LinkedIn (search)',    color: '#0ea5e9' },
+  web_search:        { label: 'Web / news',           color: '#16a34a' },
+  facebook_own:      { label: 'Facebook (MelAir)',    color: '#0891b2' },
+  instagram_own:     { label: 'Instagram (MelAir)',   color: '#c026d3' }
+};
+function meta(source) {
+  return SOURCE_META[source] || { label: source, color: '#6b7280' };
+}
+
+let chart;
+
+async function loadStats(days) {
+  const res = await fetch(`/api/stats?days=${days}`);
+  const rows = await res.json();
+
+  const days_ = [...new Set(rows.map(r => r.day.slice(0, 10)))].sort();
+  const sources = [...new Set(rows.map(r => r.source))];
+
+  const datasets = sources.map(source => ({
+    label: meta(source).label,
+    backgroundColor: meta(source).color,
+    data: days_.map(d => {
+      const match = rows.find(r => r.source === source && r.day.slice(0, 10) === d);
+      return match ? match.count : 0;
+    })
+  }));
+
+  const ctx = document.getElementById('chart').getContext('2d');
+  if (chart) chart.destroy();
+  chart = new Chart(ctx, {
+    type: 'bar',
+    data: { labels: days_, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true, ticks: { precision: 0 } } },
+      plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 11 } } } }
+    }
+  });
+
+  const total = rows.reduce((sum, r) => sum + r.count, 0);
+  const bySource = {};
+  rows.forEach(r => { bySource[r.source] = (bySource[r.source] || 0) + r.count; });
+  const tiles = [{ label: `Last ${days} days`, value: total }]
+    .concat(Object.entries(bySource).map(([source, count]) => ({ label: meta(source).label, value: count })));
+  document.getElementById('tiles').innerHTML = tiles.map(t =>
+    `<div class="tile"><div class="value">${t.value}</div><div class="label">${t.label}</div></div>`
+  ).join('');
+
+  const filter = document.getElementById('sourceFilter');
+  const current = filter.value;
+  filter.innerHTML = '<option value="">All sources</option>' +
+    sources.map(s => `<option value="${s}">${meta(s).label}</option>`).join('');
+  filter.value = current;
+}
+
+async function loadMentions(days, source) {
+  const params = new URLSearchParams({ days });
+  if (source) params.set('source', source);
+  const res = await fetch(`/api/mentions?${params}`);
+  const rows = await res.json();
+
+  const tbody = document.querySelector('#table tbody');
+  document.getElementById('empty').style.display = rows.length ? 'none' : 'block';
+  tbody.innerHTML = rows.map(r => {
+    const m = meta(r.source);
+    const when = new Date(r.first_seen_at).toLocaleString('en-AU', { timeZone: 'Australia/Melbourne' });
+    const text = r.title || r.snippet || '(no text)';
+    const link = r.url ? `<a href="${r.url}" target="_blank" rel="noopener">${escapeHtml(text)}</a>` : escapeHtml(text);
+    return `<tr>
+      <td class="source"><span class="badge" style="background:${m.color}">${m.label}</span></td>
+      <td>${when}</td>
+      <td>${link}</td>
+      <td>${r.author ? escapeHtml(r.author) : '—'}</td>
+    </tr>`;
+  }).join('');
+}
+
+function escapeHtml(str) {
+  return String(str).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+}
+
+async function refresh() {
+  const days = document.getElementById('daysFilter').value;
+  const source = document.getElementById('sourceFilter').value;
+  await loadStats(days);
+  document.getElementById('sourceFilter').value = source;
+  await loadMentions(days, source);
+}
+
+document.getElementById('sourceFilter').addEventListener('change', refresh);
+document.getElementById('daysFilter').addEventListener('change', refresh);
+refresh();
+</script>
+</body>
+</html>

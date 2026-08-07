@@ -1,0 +1,57 @@
+envVarGroups:
+  - name: melair-mentions-secrets
+    envVars:
+      - key: SEARCH_QUERY
+        value: Melbourne Airport
+      - key: REDDIT_CLIENT_ID
+        sync: false
+      - key: REDDIT_CLIENT_SECRET
+        sync: false
+      - key: YOUTUBE_API_KEY
+        sync: false
+      - key: SERPAPI_KEY
+        sync: false
+      - key: FB_PAGE_ID
+        sync: false
+      - key: FB_PAGE_ACCESS_TOKEN
+        sync: false
+      - key: IG_BUSINESS_ACCOUNT_ID
+        sync: false
+      - key: IG_ACCESS_TOKEN
+        sync: false
+
+services:
+  - type: web
+    name: melair-mentions-dashboard
+    runtime: node
+    plan: starter
+    buildCommand: npm install
+    startCommand: node src/server.js
+    envVarGroups:
+      - melair-mentions-secrets
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: melair-mentions-db
+          property: connectionString
+
+  - type: cron
+    name: melair-mentions-ingest
+    runtime: node
+    plan: starter
+    schedule: "0 20 * * *" # 20:00 UTC = 6am (AEST) / 7am (AEDT) Melbourne
+    buildCommand: npm install
+    startCommand: node src/ingest.js
+    envVarGroups:
+      - melair-mentions-secrets
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: melair-mentions-db
+          property: connectionString
+
+databases:
+  - name: melair-mentions-db
+    plan: starter
+    databaseName: melair_mentions
+    user: melair
