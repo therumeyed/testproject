@@ -3,9 +3,20 @@ const { runActor } = require('../apifyClient');
 // Overridable in case this actor gets deprecated/renamed -- see README.
 const ACTOR_ID = process.env.APIFY_GOOGLE_REVIEWS_ACTOR_ID || 'compass/google-maps-reviews-scraper';
 
-function placeIds() {
+// Accepts either a standard Place ID (ChIJ...) or a numeric CID -- CIDs are
+// what you get from a listing's Business Profile Manager URL
+// (business.google.com/n/.../profile?fid=NNNN, the fid *is* the CID), which
+// in practice is the easiest source for an account that already manages all
+// ~10 listings. Verified live: share.google short links don't resolve for
+// this actor, but https://www.google.com/maps?cid={CID} does.
+function parseLocationIds() {
   const raw = process.env.APIFY_GOOGLE_PLACE_IDS || '';
-  return raw.split(',').map((s) => s.trim()).filter(Boolean);
+  const ids = raw.split(',').map((s) => s.trim()).filter(Boolean);
+  const placeIds = ids.filter((id) => id.startsWith('ChIJ'));
+  const cidUrls = ids
+    .filter((id) => !id.startsWith('ChIJ'))
+    .map((cid) => ({ url: `https://www.google.com/maps?cid=${cid}` }));
+  return { placeIds, cidUrls };
 }
 
 // Actor wants a relative day count ("2 days"), not an absolute cutoff --
@@ -29,18 +40,21 @@ async function fetchMentions(sinceDate) {
     return [];
   }
 
-  const ids = placeIds();
-  if (ids.length === 0) {
+  const { placeIds, cidUrls } = parseLocationIds();
+  if (placeIds.length === 0 && cidUrls.length === 0) {
     console.log('[google_reviews] skipped: APIFY_GOOGLE_PLACE_IDS not set');
     return [];
   }
 
-  const items = await runActor(ACTOR_ID, {
-    placeIds: ids,
+  const input = {
     reviewsSort: 'newest',
     reviewsStartDate: relativeWindow(sinceDate),
     maxReviews: 50
-  });
+  };
+  if (placeIds.length) input.placeIds = placeIds;
+  if (cidUrls.length) input.startUrls = cidUrls;
+
+  const items = await runActor(ACTOR_ID, input);
 
   return (items || [])
     .filter((d) => !d.publishedAtDate || new Date(d.publishedAtDate) >= sinceDate)
