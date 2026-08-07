@@ -5,6 +5,10 @@ envVarGroups:
         value: Melbourne Airport
       - key: APIFY_TOKEN
         sync: false
+      - key: APIFY_REDDIT_SUBREDDITS
+        value: melbourne,australia
+      - key: APIFY_GOOGLE_PLACE_IDS
+        sync: false
       - key: FB_PAGE_ID
         sync: false
       - key: FB_PAGE_ACCESS_TOKEN

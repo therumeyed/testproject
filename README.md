@@ -4,11 +4,12 @@ Tracks mentions of "Melbourne Airport" and stores them in Postgres, refreshed on
 
 | Source | What it finds | Access needed |
 |---|---|---|
-| Reddit | Posts (not comments — no scraper here gets full-text search of arbitrary comments either) | Apify token |
+| Reddit | Posts (not comments) from specific communities only — `APIFY_REDDIT_SUBREDDITS`, defaults to r/melbourne + r/australia — filtered locally by keyword | Apify token |
 | YouTube | Videos matching the search term | Apify token |
 | Web / Facebook / Instagram / LinkedIn search | Public, Google-indexed posts/pages matching `site:facebook.com`, `site:instagram.com`, `site:linkedin.com`, and general web results | Apify token |
 | Facebook (direct) | Public posts whose text matches the search phrase, found via Facebook's own search (logged-out) | Apify token |
 | Instagram (hashtag) | Public posts tagged with the configured hashtag(s) — Instagram has no free-text post search, hashtag is the closest real capability | Apify token |
+| Google reviews | New reviews (rating, text, translated text) across MelAir's ~10 Google Business Profile car park listings, one row per listing per review | Apify token + Place IDs |
 | Facebook (MelAir's own Page) | All comments on MelAir's own Facebook posts | Page access token from MelAir |
 | Instagram (MelAir's own account) | All comments on MelAir's own Instagram posts | Business account access token from MelAir |
 
@@ -37,14 +38,19 @@ You need a local or hosted Postgres instance for `DATABASE_URL`. Tables are crea
 
 ## 2. Getting each API key
 
-**Apify** (powers Reddit, YouTube, all the `site:` searches, and the direct Facebook/Instagram sources) — sign up at https://apify.com, go to Settings → Integrations, copy the API token → put it in `APIFY_TOKEN`. One token covers all five actors. Apify bills per actor run (compute + result volume); at one keyword/hashtag checked once a day this should land in the low tens of dollars a month, but check current pricing on each actor's Store page before committing — community actor pricing isn't fixed the way an official API's is, and the Facebook search actor specifically caps free-tier results at 20/run (see its Store page for paid tiers).
+**Apify** (powers Reddit, YouTube, all the `site:` searches, the direct Facebook/Instagram sources, and Google reviews) — sign up at https://apify.com, go to Settings → Integrations, copy the API token → put it in `APIFY_TOKEN`. One token covers all six actors. Apify bills per actor run (compute + result volume); at this scale (a handful of keywords/hashtags/place IDs checked once a day) this should land in the low tens of dollars a month, but check current pricing on each actor's Store page before committing — community actor pricing isn't fixed the way an official API's is, and the Facebook search actor specifically caps free-tier results at 20/run (see its Store page for paid tiers). One operational note from getting this running: some actors require a one-time "rent"/subscribe click on their Store page before API access works, even with a valid token — if a source fails with `actor-is-not-rented`, that's what's happening.
 
-Default actors used (overridable via `APIFY_REDDIT_ACTOR_ID`, `APIFY_YOUTUBE_ACTOR_ID`, `APIFY_GOOGLE_SEARCH_ACTOR_ID`, `APIFY_FACEBOOK_ACTOR_ID`, `APIFY_INSTAGRAM_ACTOR_ID` — see `.env.example`):
-- Reddit: [`trudax/reddit-scraper`](https://apify.com/trudax/reddit-scraper)
+Default actors used (overridable via `APIFY_REDDIT_ACTOR_ID`, `APIFY_YOUTUBE_ACTOR_ID`, `APIFY_GOOGLE_SEARCH_ACTOR_ID`, `APIFY_FACEBOOK_ACTOR_ID`, `APIFY_INSTAGRAM_ACTOR_ID`, `APIFY_GOOGLE_REVIEWS_ACTOR_ID` — see `.env.example`):
+- Reddit: [`trudax/reddit-scraper-lite`](https://apify.com/trudax/reddit-scraper-lite), pay-per-result (~$3.40/1,000). Scoped to `APIFY_REDDIT_SUBREDDITS` (default `melbourne,australia`) rather than a site-wide search — pulls each community's newest posts and filters by keyword locally, which keeps cost bounded and predictable. Add more communities anytime, comma-separated, no code change needed.
 - YouTube: [`streamers/youtube-scraper`](https://apify.com/streamers/youtube-scraper)
-- Google search: [`apify/google-search-scraper`](https://apify.com/apify/google-search-scraper) (official Apify actor, not a community one — the most stable of the five)
+- Google search: [`apify/google-search-scraper`](https://apify.com/apify/google-search-scraper) (official Apify actor, not a community one — the most stable of the six)
 - Facebook direct search: [`scrapeforge/facebook-search-posts`](https://apify.com/scrapeforge/facebook-search-posts)
 - Instagram hashtag search: [`instaprism/instagram-hashtag-posts`](https://apify.com/instaprism/instagram-hashtag-posts) — set `APIFY_INSTAGRAM_HASHTAGS` (comma-separated, no `#`) to whichever hashtags are actually worth tracking; it defaults to a slugified `SEARCH_QUERY` (`melbourneairport`) if unset, which may not match what people actually tag posts with.
+- Google reviews: [`compass/google-maps-reviews-scraper`](https://apify.com/compass/google-maps-reviews-scraper), very cheap (~$0.05/1,000 reviews).
+
+**Google Business Profile reviews** need `APIFY_GOOGLE_PLACE_IDS` — a comma-separated Place ID per car park listing (~10 for MelAir). This works entirely off public Place IDs, no Google approval needed, which is why it's the primary path here rather than Google's official Business Profile API. That official API does exist and would let you *reply* to reviews (this Apify path is read-only), but requires applying for access — Google's own approval process typically takes days to weeks and needs each listing to be a verified profile active 60+ days. Worth applying for in parallel if a reply workflow becomes a requirement later, but too slow to gate this dashboard on.
+
+To get each Place ID: open the listing in Google Maps → Share → the link contains it, or use [Google's Place ID Finder](https://developers.google.com/maps/documentation/places/web-service/place-id). Each review in the dashboard shows which listing it's for (`title` includes the business name + star rating) since MelAir has multiple car park products under separate profiles.
 
 **Facebook (MelAir's own Page comments)** — this needs someone who administers MelAir's Facebook Page. Steps to hand to the MelAir team:
 1. In [Meta Business Suite](https://business.facebook.com/) → Business Settings, add the developer (you) as a **Partner** with access to the Page, or create a **System User** with access to the Page if MelAir already uses Business Manager.
@@ -72,7 +78,7 @@ This repo includes `render.yaml`, so Render can provision everything from one Bl
    - a **web service** (the dashboard, `melair-mentions-dashboard`)
    - a **cron job** (`melair-mentions-ingest`, runs daily at 20:00 UTC ≈ 6-7am Melbourne)
    - a **Postgres database** (`melair-mentions-db`), wired to both automatically via `DATABASE_URL`
-3. Render will prompt you for the values in the `melair-mentions-secrets` group (`APIFY_TOKEN` and the Facebook/Instagram keys) — fill in what you have now, add the Facebook/Instagram ones later once MelAir sends them (Environment → edit the group → redeploy, no code changes needed).
+3. Render will prompt you for the values in the `melair-mentions-secrets` group (`APIFY_TOKEN`, `APIFY_GOOGLE_PLACE_IDS`, and the Facebook/Instagram keys) — fill in what you have now, add the rest later once you have them (Environment → edit the group → redeploy, no code changes needed).
 4. Once deployed, open the web service's URL to see the dashboard.
 
 To change the daily run time, edit the `schedule` cron expression in `render.yaml` (it's UTC).
