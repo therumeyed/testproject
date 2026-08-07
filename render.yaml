@@ -27,9 +27,8 @@ services:
     plan: starter
     buildCommand: npm install
     startCommand: node src/server.js
-    envVarGroups:
-      - melair-mentions-secrets
     envVars:
+      - fromGroup: melair-mentions-secrets
       - key: DATABASE_URL
         fromDatabase:
           name: melair-mentions-db
@@ -42,9 +41,8 @@ services:
     schedule: "0 20 * * *" # 20:00 UTC = 6am (AEST) / 7am (AEDT) Melbourne
     buildCommand: npm install
     startCommand: node src/ingest.js
-    envVarGroups:
-      - melair-mentions-secrets
     envVars:
+      - fromGroup: melair-mentions-secrets
       - key: DATABASE_URL
         fromDatabase:
           name: melair-mentions-db
