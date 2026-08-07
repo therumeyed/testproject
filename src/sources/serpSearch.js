@@ -40,7 +40,7 @@ async function fetchMentions() {
   ];
 
   const items = await runActor(ACTOR_ID, {
-    queries: rawQueries.map(buildGoogleUrl),
+    queries: rawQueries.map(buildGoogleUrl).join('\n'),
     countryCode: 'au'
   });
 
