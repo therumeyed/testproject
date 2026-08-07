@@ -50,6 +50,6 @@ services:
 
 databases:
   - name: melair-mentions-db
-    plan: starter
+    plan: basic-1gb
     databaseName: melair_mentions
     user: melair
