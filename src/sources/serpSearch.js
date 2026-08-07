@@ -1,57 +1,63 @@
-const SERPAPI_BASE = 'https://serpapi.com/search.json';
+const { runActor } = require('../apifyClient');
 
-function buildQueries(query) {
-  return [
-    { source: 'facebook_search', q: `site:facebook.com "${query}"` },
-    { source: 'instagram_search', q: `site:instagram.com "${query}"` },
-    { source: 'linkedin_search', q: `site:linkedin.com "${query}"` },
-    { source: 'web_search', q: `"${query}"` }
-  ];
+// Overridable in case this actor gets deprecated/renamed -- see README.
+const ACTOR_ID = process.env.APIFY_GOOGLE_SEARCH_ACTOR_ID || 'apify/google-search-scraper';
+
+function buildGoogleUrl(q) {
+  const params = new URLSearchParams({ q, tbs: 'qdr:d', num: '30', gl: 'au' });
+  return `https://www.google.com/search?${params}`;
 }
 
-async function runQuery(apiKey, source, q) {
-  const params = new URLSearchParams({
-    engine: 'google',
-    q,
-    api_key: apiKey,
-    tbs: 'qdr:d', // restrict to results from the past 24 hours
-    num: '30'
-  });
-
-  const res = await fetch(`${SERPAPI_BASE}?${params}`);
-  if (!res.ok) throw new Error(`SerpApi request failed for ${source}: ${res.status} ${await res.text()}`);
-
-  const data = await res.json();
-  // No stable per-result ID from Google -- the URL itself is the dedupe key,
-  // which is also what "first instance found on Google search results" means in practice.
-  return (data.organic_results || []).map((r) => ({
-    source,
-    external_id: r.link,
-    url: r.link,
-    title: r.title || null,
-    snippet: r.snippet || null,
-    author: null,
-    posted_at: null,
-    raw_data: r
-  }));
+// Classify by the result's own domain rather than trying to match it back to
+// whichever site:-restricted query produced it -- more robust against
+// however the actor echoes the query it ran.
+function classifySource(url) {
+  try {
+    const host = new URL(url).hostname.replace(/^www\./, '');
+    if (host.endsWith('facebook.com')) return 'facebook_search';
+    if (host.endsWith('instagram.com')) return 'instagram_search';
+    if (host.endsWith('linkedin.com')) return 'linkedin_search';
+  } catch {
+    // malformed URL, fall through to web_search
+  }
+  return 'web_search';
 }
 
-// This only ever surfaces indexed post/page content, never comment threads
+// Only ever surfaces indexed post/page content, never comment threads
 // underneath someone else's post -- that data isn't reachable via search indexing.
 async function fetchMentions() {
-  const apiKey = process.env.SERPAPI_KEY;
-  if (!apiKey) {
-    console.log('[serp] skipped: SERPAPI_KEY not set');
+  if (!process.env.APIFY_TOKEN) {
+    console.log('[serp] skipped: APIFY_TOKEN not set');
     return [];
   }
 
   const query = process.env.SEARCH_QUERY || 'Melbourne Airport';
+  const rawQueries = [
+    `site:facebook.com "${query}"`,
+    `site:instagram.com "${query}"`,
+    `site:linkedin.com "${query}"`,
+    `"${query}"`
+  ];
+
+  const items = await runActor(ACTOR_ID, {
+    queries: rawQueries.map(buildGoogleUrl),
+    countryCode: 'au'
+  });
+
   const results = [];
-  for (const { source, q } of buildQueries(query)) {
-    try {
-      results.push(...(await runQuery(apiKey, source, q)));
-    } catch (err) {
-      console.error(`[serp:${source}] failed:`, err.message);
+  for (const item of items || []) {
+    for (const r of item.organicResults || []) {
+      if (!r.url) continue;
+      results.push({
+        source: classifySource(r.url),
+        external_id: r.url,
+        url: r.url,
+        title: r.title || null,
+        snippet: r.description || null,
+        author: null,
+        posted_at: null,
+        raw_data: r
+      });
     }
   }
   return results;

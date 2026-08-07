@@ -3,13 +3,7 @@ envVarGroups:
     envVars:
       - key: SEARCH_QUERY
         value: Melbourne Airport
-      - key: REDDIT_CLIENT_ID
-        sync: false
-      - key: REDDIT_CLIENT_SECRET
-        sync: false
-      - key: YOUTUBE_API_KEY
-        sync: false
-      - key: SERPAPI_KEY
+      - key: APIFY_TOKEN
         sync: false
       - key: FB_PAGE_ID
         sync: false

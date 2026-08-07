@@ -4,11 +4,13 @@ Tracks mentions of "Melbourne Airport" and stores them in Postgres, refreshed on
 
 | Source | What it finds | Access needed |
 |---|---|---|
-| Reddit | Posts (not comments — Reddit's API doesn't support full-text comment search) | Free Reddit app credentials |
-| YouTube | Videos matching the search term | Free Google API key |
-| Web / Facebook / Instagram / LinkedIn search | Public, Google-indexed posts/pages matching `site:facebook.com`, `site:instagram.com`, `site:linkedin.com`, and general web results | SerpApi key (paid, cheap at this volume) |
+| Reddit | Posts (not comments — no scraper here gets full-text search of arbitrary comments either) | Apify token |
+| YouTube | Videos matching the search term | Apify token |
+| Web / Facebook / Instagram / LinkedIn search | Public, Google-indexed posts/pages matching `site:facebook.com`, `site:instagram.com`, `site:linkedin.com`, and general web results | Apify token |
 | Facebook (MelAir's own Page) | All comments on MelAir's own Facebook posts | Page access token from MelAir |
 | Instagram (MelAir's own account) | All comments on MelAir's own Instagram posts | Business account access token from MelAir |
+
+Reddit, YouTube, and the search sources run through [Apify](https://apify.com) actors (third-party scrapers) rather than each platform's own official API. Worth knowing: these are community-maintained scrapers, not a versioned platform contract — the specific actor an integration uses could get renamed, change its input/output fields, or be deprecated by its maintainer with little notice. Each actor ID is a one-line env var override (see §2) precisely so a swap doesn't require touching the ingestion pipeline, just the field-mapping in that one source file if the replacement's output shape differs. If a source suddenly starts returning zero results, check the actor's Apify Store page first.
 
 **Only new content is ever stored.** Each daily run looks at roughly the last 24 hours; nothing is backfilled. Search-engine results are deduped by URL, so once we've stored a link it won't reappear even if it keeps showing up in later searches — matching "first time we saw it" rather than "when it was actually posted" for sources where Google doesn't reliably expose a post date.
 
@@ -30,11 +32,12 @@ You need a local or hosted Postgres instance for `DATABASE_URL`. Tables are crea
 
 ## 2. Getting each API key
 
-**Reddit** — go to https://www.reddit.com/prefs/apps → "create app" → choose type **"web app"** → note the client ID (under the app name) and secret. Free, no approval wait. Put them in `REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET`.
+**Apify** (powers Reddit, YouTube, and all the `site:` searches) — sign up at https://apify.com, go to Settings → Integrations, copy the API token → put it in `APIFY_TOKEN`. Apify bills per actor run (compute + result volume); at one keyword checked once a day across 3 actors this should land in the low tens of dollars a month, but check current pricing on each actor's Store page before committing — community actor pricing isn't fixed the way an official API's is.
 
-**YouTube** — in [Google Cloud Console](https://console.cloud.google.com/), create/select a project → enable **"YouTube Data API v3"** → Credentials → create an API key. Free (10,000 quota units/day, this app uses ~100/run). Put it in `YOUTUBE_API_KEY`.
-
-**SerpApi** (powers all the `site:` searches) — sign up at https://serpapi.com, grab the API key from the dashboard. Paid, but at one keyword run once a day this is a few dollars a month at most. Put it in `SERPAPI_KEY`.
+Default actors used (overridable via `APIFY_REDDIT_ACTOR_ID`, `APIFY_YOUTUBE_ACTOR_ID`, `APIFY_GOOGLE_SEARCH_ACTOR_ID` — see `.env.example`):
+- Reddit: [`trudax/reddit-scraper`](https://apify.com/trudax/reddit-scraper)
+- YouTube: [`streamers/youtube-scraper`](https://apify.com/streamers/youtube-scraper)
+- Google search: [`apify/google-search-scraper`](https://apify.com/apify/google-search-scraper) (official Apify actor, not a community one — the most stable of the three)
 
 **Facebook (MelAir's own Page comments)** — this needs someone who administers MelAir's Facebook Page. Steps to hand to the MelAir team:
 1. In [Meta Business Suite](https://business.facebook.com/) → Business Settings, add the developer (you) as a **Partner** with access to the Page, or create a **System User** with access to the Page if MelAir already uses Business Manager.
@@ -51,7 +54,7 @@ Note: short-lived tokens expire quickly — ask for (or generate) a **long-lived
 
 Until these two are provided, those two sources just log a skip message and the rest of the dashboard works fine.
 
-**LinkedIn** — the public `site:linkedin.com` search is already included via SerpApi, no separate setup needed. Pulling comments from MelAir's own LinkedIn Company Page is not built in this version: LinkedIn's Community Management API requires applying to their Marketing Developer Program, which has a slower, less predictable approval process than Meta's. Worth adding later if it's approved, but not assumed here.
+**LinkedIn** — the public `site:linkedin.com` search is already included via the Apify Google search actor, no separate setup needed. Pulling comments from MelAir's own LinkedIn Company Page is not built in this version: LinkedIn's Community Management API requires applying to their Marketing Developer Program, which has a slower, less predictable approval process than Meta's. Worth adding later if it's approved, but not assumed here.
 
 ## 3. Deploy to Render
 
@@ -62,7 +65,7 @@ This repo includes `render.yaml`, so Render can provision everything from one Bl
    - a **web service** (the dashboard, `melair-mentions-dashboard`)
    - a **cron job** (`melair-mentions-ingest`, runs daily at 20:00 UTC ≈ 6-7am Melbourne)
    - a **Postgres database** (`melair-mentions-db`), wired to both automatically via `DATABASE_URL`
-3. Render will prompt you for the values in the `melair-mentions-secrets` group (Reddit/YouTube/SerpApi/Facebook/Instagram keys) — fill in what you have now, add the Facebook/Instagram ones later once MelAir sends them (Environment → edit the group → redeploy, no code changes needed).
+3. Render will prompt you for the values in the `melair-mentions-secrets` group (`APIFY_TOKEN` and the Facebook/Instagram keys) — fill in what you have now, add the Facebook/Instagram ones later once MelAir sends them (Environment → edit the group → redeploy, no code changes needed).
 4. Once deployed, open the web service's URL to see the dashboard.
 
 To change the daily run time, edit the `schedule` cron expression in `render.yaml` (it's UTC).
