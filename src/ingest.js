@@ -1,5 +1,7 @@
 require('dotenv').config();
-const { pool, initSchemaWithRetry, insertMentions } = require('./db');
+const { pool, initSchemaWithRetry, insertMentions, updateSentiment, markAlerted } = require('./db');
+const { classifyMentions } = require('./sentiment');
+const { sendEmail } = require('./email');
 const reddit = require('./sources/reddit');
 const youtube = require('./sources/youtube');
 const serp = require('./sources/serpSearch');
@@ -20,6 +22,41 @@ const SOURCES = [
   { name: 'instagram_own', fetch: instagramOwned.fetchMentions }
 ];
 
+function escapeHtml(str) {
+  return String(str).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function mentionRowHtml(m) {
+  const title = escapeHtml(m.title || m.source);
+  const snippet = escapeHtml((m.snippet || '').slice(0, 300));
+  const reason = m.reason ? `<div style="color:#64748b;font-size:12px;margin-top:4px;">Why: ${escapeHtml(m.reason)}</div>` : '';
+  const link = m.url ? `<a href="${m.url}">${title}</a>` : title;
+  return `<div style="margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid #e2e8f0;">
+    <div style="font-size:11px;text-transform:uppercase;color:#64748b;">${escapeHtml(m.source)}${m.severity ? ` — ${escapeHtml(m.severity)} severity` : ''}</div>
+    <div style="font-weight:600;">${link}</div>
+    <div style="font-size:13px;color:#0f172a;">${snippet}</div>
+    ${reason}
+  </div>`;
+}
+
+async function sendUrgentAlert(urgentMentions) {
+  if (urgentMentions.length === 0) return;
+  const html = `<h2>Urgent: ${urgentMentions.length} high-severity negative mention${urgentMentions.length > 1 ? 's' : ''} found</h2>
+    <p>Found in today's Melbourne Airport mentions run. Recommend reviewing and responding directly.</p>
+    ${urgentMentions.map(mentionRowHtml).join('')}`;
+  await sendEmail({ subject: `⚠️ ${urgentMentions.length} urgent negative mention(s) -- Melbourne Airport`, html });
+  for (const m of urgentMentions) await markAlerted(m.id);
+}
+
+async function sendDailyDigest(negativeMentions) {
+  const html = negativeMentions.length === 0
+    ? `<h2>Melbourne Airport mentions -- daily digest</h2><p>No negative mentions found today.</p>`
+    : `<h2>Melbourne Airport mentions -- daily digest</h2>
+       <p>${negativeMentions.length} negative mention${negativeMentions.length > 1 ? 's' : ''} found today across all sources.</p>
+       ${negativeMentions.map(mentionRowHtml).join('')}`;
+  await sendEmail({ subject: `Daily negative mentions digest -- ${negativeMentions.length} found`, html });
+}
+
 // Rolling 24h window, run once a day by the Render cron job. Each source
 // module dedupes new items against `mentions` via the (source, external_id)
 // unique constraint, so nothing is ever re-inserted or backfilled -- only
@@ -30,16 +67,18 @@ async function run() {
   const sinceDate = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
   let total = 0;
+  const allNew = [];
   for (const src of SOURCES) {
     const startedAt = new Date();
     try {
       const mentions = await src.fetch(sinceDate);
-      const inserted = await insertMentions(mentions);
-      total += inserted;
-      console.log(`[${src.name}] fetched=${mentions.length} new=${inserted}`);
+      const insertedRows = await insertMentions(mentions);
+      total += insertedRows.length;
+      allNew.push(...insertedRows);
+      console.log(`[${src.name}] fetched=${mentions.length} new=${insertedRows.length}`);
       await pool.query(
         `INSERT INTO ingest_runs (source, started_at, finished_at, new_count) VALUES ($1,$2,now(),$3)`,
-        [src.name, startedAt, inserted]
+        [src.name, startedAt, insertedRows.length]
       );
     } catch (err) {
       console.error(`[${src.name}] failed:`, err.message);
@@ -49,8 +88,28 @@ async function run() {
       );
     }
   }
-
   console.log(`Ingest complete. ${total} new mentions.`);
+
+  try {
+    const classifications = await classifyMentions(allNew);
+    const byId = new Map(allNew.map((m) => [m.id, m]));
+    const classified = [];
+    for (const c of classifications) {
+      await updateSentiment(c.id, c);
+      const m = byId.get(c.id);
+      if (m) classified.push({ ...m, ...c });
+    }
+
+    const negative = classified.filter((m) => m.sentiment === 'negative');
+    const urgent = negative.filter((m) => m.severity === 'high');
+    console.log(`Classified ${classified.length} mentions: ${negative.length} negative (${urgent.length} high severity).`);
+
+    await sendUrgentAlert(urgent);
+    await sendDailyDigest(negative);
+  } catch (err) {
+    console.error('Classification/alerting failed:', err.message);
+  }
+
   await pool.end();
 }
 

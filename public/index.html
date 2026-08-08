@@ -92,6 +92,7 @@
   .mention-link:hover .mention-title { text-decoration: underline; }
   .mention-title { font-weight: 600; color: var(--accent); margin-bottom: 2px; }
   .mention-snippet { color: var(--text); font-size: 12.5px; line-height: 1.4; }
+  .mention-reason { color: var(--muted); font-size: 11.5px; font-style: italic; margin-top: 4px; }
 </style>
 </head>
 <body>
@@ -100,6 +101,7 @@
   <p>Reddit, YouTube, web/Facebook/Instagram/LinkedIn search results, and MelAir's own Facebook/Instagram comments. Updated daily.</p>
 </header>
 <main>
+  <div class="tiles" id="sentimentTiles"></div>
   <div class="tiles" id="tiles"></div>
 
   <div class="panel">
@@ -113,6 +115,12 @@
       <select id="sourceFilter">
         <option value="">All sources</option>
       </select>
+      <select id="sentimentFilter">
+        <option value="">All sentiment</option>
+        <option value="negative">Negative only</option>
+        <option value="neutral">Neutral only</option>
+        <option value="positive">Positive only</option>
+      </select>
       <select id="daysFilter">
         <option value="7">Last 7 days</option>
         <option value="14" selected>Last 14 days</option>
@@ -121,7 +129,7 @@
     </div>
     <table id="table">
       <thead>
-        <tr><th>Source</th><th>First seen</th><th>Title / snippet</th><th>Author</th></tr>
+        <tr><th>Source</th><th>Sentiment</th><th>First seen</th><th>Title / snippet</th><th>Author</th></tr>
       </thead>
       <tbody></tbody>
     </table>
@@ -147,7 +155,26 @@ function meta(source) {
   return SOURCE_META[source] || { label: source, color: '#6b7280' };
 }
 
+const SENTIMENT_META = {
+  negative:     { label: 'Negative',     color: '#dc2626' },
+  neutral:      { label: 'Neutral',      color: '#6b7280' },
+  positive:     { label: 'Positive',     color: '#16a34a' },
+  unclassified: { label: 'Unclassified', color: '#cbd5e1' }
+};
+function sentimentMeta(s) {
+  return SENTIMENT_META[s || 'unclassified'] || SENTIMENT_META.unclassified;
+}
+
 let chart;
+
+async function loadSentimentStats(days) {
+  const res = await fetch(`/api/sentiment-stats?days=${days}`);
+  const rows = await res.json();
+  const tiles = rows.map(r => ({ label: sentimentMeta(r.sentiment).label, value: r.count, color: sentimentMeta(r.sentiment).color }));
+  document.getElementById('sentimentTiles').innerHTML = tiles.map(t =>
+    `<div class="tile"><div class="value" style="color:${t.color}">${t.value}</div><div class="label">${t.label}</div></div>`
+  ).join('');
+}
 
 async function loadStats(days) {
   const res = await fetch(`/api/stats?days=${days}`);
@@ -194,9 +221,10 @@ async function loadStats(days) {
   filter.value = current;
 }
 
-async function loadMentions(days, source) {
+async function loadMentions(days, source, sentiment) {
   const params = new URLSearchParams({ days });
   if (source) params.set('source', source);
+  if (sentiment) params.set('sentiment', sentiment);
   const res = await fetch(`/api/mentions?${params}`);
   const rows = await res.json();
 
@@ -204,14 +232,18 @@ async function loadMentions(days, source) {
   document.getElementById('empty').style.display = rows.length ? 'none' : 'block';
   tbody.innerHTML = rows.map(r => {
     const m = meta(r.source);
+    const sm = sentimentMeta(r.sentiment);
     const when = new Date(r.first_seen_at).toLocaleString('en-AU', { timeZone: 'Australia/Melbourne' });
     const titleHtml = r.title ? `<div class="mention-title">${escapeHtml(r.title)}</div>` : '';
     const snippetText = r.snippet ? (r.snippet.length > 220 ? r.snippet.slice(0, 220) + '…' : r.snippet) : '';
     const snippetHtml = snippetText ? `<div class="mention-snippet">${escapeHtml(snippetText)}</div>` : '';
-    const body = titleHtml + snippetHtml || '(no text)';
+    const reasonHtml = r.sentiment_reason ? `<div class="mention-reason" title="${escapeHtml(r.sentiment_reason)}">${escapeHtml(r.sentiment_reason)}</div>` : '';
+    const body = titleHtml + snippetHtml + reasonHtml || '(no text)';
     const link = r.url ? `<a href="${r.url}" target="_blank" rel="noopener" class="mention-link">${body}</a>` : body;
+    const severityLabel = r.severity ? ` (${r.severity})` : '';
     return `<tr>
       <td class="source"><span class="badge" style="background:${m.color}">${m.label}</span></td>
+      <td><span class="badge" style="background:${sm.color}">${sm.label}${severityLabel}</span></td>
       <td>${when}</td>
       <td>${link}</td>
       <td>${r.author ? escapeHtml(r.author) : '—'}</td>
@@ -226,12 +258,15 @@ function escapeHtml(str) {
 async function refresh() {
   const days = document.getElementById('daysFilter').value;
   const source = document.getElementById('sourceFilter').value;
+  const sentiment = document.getElementById('sentimentFilter').value;
   await loadStats(days);
+  await loadSentimentStats(days);
   document.getElementById('sourceFilter').value = source;
-  await loadMentions(days, source);
+  await loadMentions(days, source, sentiment);
 }
 
 document.getElementById('sourceFilter').addEventListener('change', refresh);
+document.getElementById('sentimentFilter').addEventListener('change', refresh);
 document.getElementById('daysFilter').addEventListener('change', refresh);
 refresh();
 </script>

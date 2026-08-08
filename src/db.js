@@ -23,8 +23,13 @@ async function initSchema() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       UNIQUE(source, external_id)
     );
+    ALTER TABLE mentions ADD COLUMN IF NOT EXISTS sentiment TEXT;
+    ALTER TABLE mentions ADD COLUMN IF NOT EXISTS severity TEXT;
+    ALTER TABLE mentions ADD COLUMN IF NOT EXISTS sentiment_reason TEXT;
+    ALTER TABLE mentions ADD COLUMN IF NOT EXISTS alerted_at TIMESTAMPTZ;
     CREATE INDEX IF NOT EXISTS idx_mentions_first_seen ON mentions(first_seen_at);
     CREATE INDEX IF NOT EXISTS idx_mentions_source ON mentions(source);
+    CREATE INDEX IF NOT EXISTS idx_mentions_sentiment ON mentions(sentiment);
 
     CREATE TABLE IF NOT EXISTS ingest_runs (
       id SERIAL PRIMARY KEY,
@@ -55,14 +60,17 @@ async function initSchemaWithRetry(maxAttempts = 10, delayMs = 3000) {
 
 // ON CONFLICT DO NOTHING preserves first_seen_at from the original insert,
 // which is what makes "first time we saw it" dedupe work across daily runs.
+// Returns only the rows that were actually newly inserted (with id, source,
+// title, snippet, url) so callers can classify/alert on exactly those,
+// never on rows that were already seen in a previous run.
 async function insertMentions(mentions) {
-  let inserted = 0;
+  const insertedRows = [];
   for (const m of mentions) {
     const res = await pool.query(
       `INSERT INTO mentions (source, external_id, url, title, snippet, author, posted_at, raw_data)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
        ON CONFLICT (source, external_id) DO NOTHING
-       RETURNING id`,
+       RETURNING id, source, title, snippet, url`,
       [
         m.source,
         m.external_id,
@@ -74,9 +82,20 @@ async function insertMentions(mentions) {
         m.raw_data ? JSON.stringify(m.raw_data) : null
       ]
     );
-    if (res.rowCount > 0) inserted++;
+    if (res.rowCount > 0) insertedRows.push(res.rows[0]);
   }
-  return inserted;
+  return insertedRows;
 }
 
-module.exports = { pool, initSchema, initSchemaWithRetry, insertMentions };
+async function updateSentiment(id, { sentiment, severity, reason }) {
+  await pool.query(
+    `UPDATE mentions SET sentiment = $2, severity = $3, sentiment_reason = $4 WHERE id = $1`,
+    [id, sentiment || null, severity || null, reason || null]
+  );
+}
+
+async function markAlerted(id) {
+  await pool.query(`UPDATE mentions SET alerted_at = now() WHERE id = $1`, [id]);
+}
+
+module.exports = { pool, initSchema, initSchemaWithRetry, insertMentions, updateSentiment, markAlerted };

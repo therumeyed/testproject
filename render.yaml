@@ -17,6 +17,12 @@ envVarGroups:
         sync: false
       - key: IG_ACCESS_TOKEN
         sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: ALERT_EMAIL_TO
+        value: nitin@alleygroup.com.au
 
 services:
   - type: web

@@ -9,7 +9,7 @@ Tracks mentions of "Melbourne Airport" and stores them in Postgres, refreshed on
 | Web / Facebook / Instagram / LinkedIn search | Public, Google-indexed posts/pages matching `site:facebook.com`, `site:instagram.com`, `site:linkedin.com`, and general web results | Apify token |
 | Facebook (direct) | Public posts whose text matches the search phrase, found via Facebook's own search (logged-out) | Apify token |
 | Instagram (hashtag) | Public posts tagged with the configured hashtag(s) — Instagram has no free-text post search, hashtag is the closest real capability | Apify token |
-| Google reviews | New reviews (rating, text, translated text) across MelAir's ~10 Google Business Profile car park listings, one row per listing per review | Apify token + Place IDs |
+| Google reviews | New reviews (rating, text, translated text) across MelAir's Google Business Profile car park listings (currently 6 configured), one row per listing per review | Apify token + Place IDs |
 | Facebook (MelAir's own Page) | All comments on MelAir's own Facebook posts | Page access token from MelAir |
 | Instagram (MelAir's own account) | All comments on MelAir's own Instagram posts | Business account access token from MelAir |
 
@@ -48,7 +48,7 @@ Default actors used (overridable via `APIFY_REDDIT_ACTOR_ID`, `APIFY_YOUTUBE_ACT
 - Instagram hashtag search: [`instaprism/instagram-hashtag-posts`](https://apify.com/instaprism/instagram-hashtag-posts) — set `APIFY_INSTAGRAM_HASHTAGS` (comma-separated, no `#`) to whichever hashtags are actually worth tracking; it defaults to a slugified `SEARCH_QUERY` (`melbourneairport`) if unset, which may not match what people actually tag posts with.
 - Google reviews: [`compass/google-maps-reviews-scraper`](https://apify.com/compass/google-maps-reviews-scraper), very cheap (~$0.05/1,000 reviews).
 
-**Google Business Profile reviews** need `APIFY_GOOGLE_PLACE_IDS` — a comma-separated identifier per car park listing (~10 for MelAir). This works entirely off public identifiers, no Google approval needed, which is why it's the primary path here rather than Google's official Business Profile API. That official API does exist and would let you *reply* to reviews (this Apify path is read-only), but requires applying for access — Google's own approval process typically takes days to weeks and needs each listing to be a verified profile active 60+ days. Worth applying for in parallel if a reply workflow becomes a requirement later, but too slow to gate this dashboard on.
+**Google Business Profile reviews** need `APIFY_GOOGLE_PLACE_IDS` — a comma-separated identifier per car park listing (6 currently configured for MelAir). This works entirely off public identifiers, no Google approval needed, which is why it's the primary path here rather than Google's official Business Profile API. That official API does exist and would let you *reply* to reviews (this Apify path is read-only), but requires applying for access — Google's own approval process typically takes days to weeks and needs each listing to be a verified profile active 60+ days. Worth applying for in parallel if a reply workflow becomes a requirement later, but too slow to gate this dashboard on.
 
 The env var accepts either identifier type, auto-detected:
 - **A numeric CID** — the easiest source if you already manage the listing: open it in [Business Profile Manager](https://business.google.com/), the URL is `business.google.com/n/.../profile?fid=NNNNN` — that `fid` number *is* the CID. Verified working this way. (A Maps "Share" link did **not** work with this actor — its short-URL redirect isn't followed, so don't use those.)
@@ -87,6 +87,23 @@ This repo includes `render.yaml`, so Render can provision everything from one Bl
 
 To change the daily run time, edit the `schedule` cron expression in `render.yaml` (it's UTC).
 
-## 4. Extending later
-- Sentiment/issue categorization isn't built in this version — the `raw_data` JSONB column on every row keeps the full original API response, so this can be layered on without re-pulling anything.
-- Slack/email alerting on spikes or negative content is a small addition on top of `/api/stats` once categorization exists.
+## 4. Sentiment classification and email alerts
+
+Every newly-inserted mention (never re-classified once done, matching the "only new content" rule elsewhere) is classified by Claude into `negative` / `neutral` / `positive`, with a `low` / `medium` / `high` severity and a one-line reason for negatives. This runs by meaning, not a keyword list — e.g. "kind of a hassle now" is correctly flagged negative even with no explicit negative word — which was the point of picking it over a free keyword-based approach.
+
+Two emails come out of each daily run, both via [Resend](https://resend.com):
+- **Urgent alert** — sent immediately (i.e. same run) if any mention classified `high` severity is found. Marks each as alerted (`alerted_at`) so it's never re-sent for the same mention.
+- **Daily digest** — always sent once per run, listing every `negative` mention found that day (all severities), grouped with source/severity/link/reason. Sent even when there's nothing negative (says so explicitly) — doubles as a quiet confirmation the pipeline ran, not just a complaints feed.
+
+**Setup:**
+1. **Anthropic** — get a key at https://console.anthropic.com → `ANTHROPIC_API_KEY`. Uses Haiku by default (`ANTHROPIC_MODEL` to override); cheap at this volume — classification is batched (20 mentions/request), typically a few requests per day.
+2. **Resend** — sign up at https://resend.com **using `nitin@alleygroup.com.au` as the account email** (or whichever address should receive the first test) → `RESEND_API_KEY`. This matters: Resend's sandbox sender (`onboarding@resend.dev`, the default `EMAIL_FROM`) only delivers to the address the account signed up with until a domain is verified — sending to a different address will silently go nowhere. `ALERT_EMAIL_TO` accepts a comma-separated list; currently defaults to `nitin@alleygroup.com.au` per the initial test request.
+3. **For production** (multiple recipients, e.g. MelAir's ops team, and a proper sender address) — verify a domain under Resend → Domains (adds SPF/DKIM/DMARC DNS records to a domain you control, e.g. the agency's), then set `EMAIL_FROM` to an address on that domain and add every real recipient to `ALERT_EMAIL_TO`.
+
+Both are skipped gracefully without their keys set — same pattern as every other source in this pipeline — so the rest of the dashboard keeps working either way.
+
+The dashboard itself shows a sentiment badge per mention, sentiment summary tiles, and a sentiment filter (including "Negative only") on top of the existing source/date filters.
+
+## 5. Extending later
+- Issue-category tagging (signage, pricing, shuttle, staff, accessibility) could be added to the same classification pass with one more field in the prompt — `raw_data` JSONB is kept on every row either way, so nothing needs re-pulling to add this.
+- Slack alerting is a small addition alongside the Resend call in `ingest.js` if email turns out to be too slow for urgent alerts.
