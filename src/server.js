@@ -57,6 +57,18 @@ app.get('/api/sentiment-stats', async (req, res) => {
   res.json(result.rows);
 });
 
+// Manual data-reset utility for use during tuning -- gated on ADMIN_TOKEN so
+// it's harmless without it. Not exposed anywhere in the UI; call directly.
+app.post('/admin/reset-mentions', express.json(), async (req, res) => {
+  const token = req.get('Authorization')?.replace(/^Bearer\s+/i, '');
+  if (!process.env.ADMIN_TOKEN || token !== process.env.ADMIN_TOKEN) {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+  const before = await pool.query('SELECT count(*) FROM mentions');
+  await pool.query('TRUNCATE TABLE mentions, ingest_runs RESTART IDENTITY');
+  res.json({ ok: true, mentionsDeleted: Number(before.rows[0].count) });
+});
+
 const port = process.env.PORT || 3000;
 
 initSchemaWithRetry()

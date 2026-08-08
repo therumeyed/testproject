@@ -23,6 +23,8 @@ envVarGroups:
         sync: false
       - key: ALERT_EMAIL_TO
         value: nitin@alleygroup.com.au
+      - key: ADMIN_TOKEN
+        generateValue: true
 
 services:
   - type: web
