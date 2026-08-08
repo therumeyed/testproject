@@ -98,4 +98,27 @@ async function markAlerted(id) {
   await pool.query(`UPDATE mentions SET alerted_at = now() WHERE id = $1`, [id]);
 }
 
-module.exports = { pool, initSchema, initSchemaWithRetry, insertMentions, updateSentiment, markAlerted };
+// All negative mentions first seen on the current Melbourne calendar day,
+// regardless of which of the day's several runs found them -- used for the
+// once-daily digest so it's a true day rollup, not just the triggering run's
+// own findings.
+async function getTodaysNegativeMentions() {
+  const res = await pool.query(`
+    SELECT id, source, title, snippet, url, severity, sentiment_reason AS reason
+    FROM mentions
+    WHERE sentiment = 'negative'
+      AND (first_seen_at AT TIME ZONE 'Australia/Melbourne')::date = (now() AT TIME ZONE 'Australia/Melbourne')::date
+    ORDER BY first_seen_at ASC
+  `);
+  return res.rows;
+}
+
+module.exports = {
+  pool,
+  initSchema,
+  initSchemaWithRetry,
+  insertMentions,
+  updateSentiment,
+  markAlerted,
+  getTodaysNegativeMentions
+};

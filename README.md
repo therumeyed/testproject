@@ -89,7 +89,9 @@ This repo includes `render.yaml`, so Render can provision everything from one Bl
 
 **Running 3x/day roughly triples the Apify actor spend** versus once/day — most of these actors bill per run or per result regardless of whether anything new turns up, so three checks means paying for three fetches even on runs that find nothing. Worth keeping an eye on Apify's usage dashboard after the first week at this cadence.
 
-**Email behavior at this cadence:** the urgent alert fires on every run that finds a high-severity negative (matching the "notify quickly" ask). The negative-mentions digest also now sends every run — so up to 3 emails/day, each covering only what that specific run found (already deduped against every prior run) — rather than one true daily rollup. If a single once-a-day summary is preferred instead, that's a straightforward change (aggregate by day instead of by run) — just say so.
+**Email behavior at this cadence:** the dashboard/database refresh on all three daily runs, but email volume is intentionally decoupled from that:
+- **Urgent alert** — real-time, sent on *any* run (9am, 1pm, or 5pm) that finds a high-severity negative mention.
+- **Daily digest** — genuinely once/day, sent only on the last (5pm-ish) run, aggregating every negative mention first seen anywhere across *all* of that day's runs — not just the triggering run's own findings. Determined by checking the current Melbourne wall-clock hour (`isDigestRun()` in `ingest.js`), since Render doesn't pass any run-identifying info to the script. Known limitation: if that specific run fails outright, no digest goes out that day (it doesn't fall back to an earlier run).
 
 ## 4. Sentiment classification and email alerts
 

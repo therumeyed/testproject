@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { pool, initSchemaWithRetry, insertMentions, updateSentiment, markAlerted } = require('./db');
+const { pool, initSchemaWithRetry, insertMentions, updateSentiment, markAlerted, getTodaysNegativeMentions } = require('./db');
 const { classifyMentions } = require('./sentiment');
 const { sendEmail } = require('./email');
 const reddit = require('./sources/reddit');
@@ -48,16 +48,27 @@ async function sendUrgentAlert(urgentMentions) {
   for (const m of urgentMentions) await markAlerted(m.id);
 }
 
-// Sent every run, not literally once/day -- when the cron runs multiple
-// times a day, each run's digest covers only what that run found (already
-// deduped against every prior run), not a rolled-up full-day summary.
-async function sendDigest(negativeMentions) {
+async function sendDailyDigest(negativeMentions) {
   const html = negativeMentions.length === 0
-    ? `<h2>Melbourne Airport mentions -- check-in</h2><p>No negative mentions found in this check.</p>`
-    : `<h2>Melbourne Airport mentions -- check-in</h2>
-       <p>${negativeMentions.length} negative mention${negativeMentions.length > 1 ? 's' : ''} found in this check across all sources.</p>
+    ? `<h2>Melbourne Airport mentions -- daily digest</h2><p>No negative mentions found today.</p>`
+    : `<h2>Melbourne Airport mentions -- daily digest</h2>
+       <p>${negativeMentions.length} negative mention${negativeMentions.length > 1 ? 's' : ''} found today across all sources (all of today's checks combined).</p>
        ${negativeMentions.map(mentionRowHtml).join('')}`;
-  await sendEmail({ subject: `Negative mentions -- ${negativeMentions.length} found`, html });
+  await sendEmail({ subject: `Daily negative mentions digest -- ${negativeMentions.length} found`, html });
+}
+
+// The dashboard/DB refreshes on every scheduled run (currently 3x/day), but
+// the digest email should only land once/day -- send it only on the last
+// run of the Melbourne day, aggregating everything found across all of that
+// day's runs via getTodaysNegativeMentions() rather than just this run's own
+// findings. If that run fails outright, no digest goes out that day -- a
+// known limitation of keying this off wall-clock time rather than tracking
+// "last successful run," acceptable for now.
+function isDigestRun() {
+  const hour = Number(
+    new Intl.DateTimeFormat('en-AU', { timeZone: 'Australia/Melbourne', hour: 'numeric', hour12: false }).format(new Date())
+  );
+  return hour >= 16;
 }
 
 // Rolling 24h window, run once a day by the Render cron job. Each source
@@ -107,8 +118,14 @@ async function run() {
     const urgent = negative.filter((m) => m.severity === 'high');
     console.log(`Classified ${classified.length} mentions: ${negative.length} negative (${urgent.length} high severity).`);
 
-    await sendUrgentAlert(urgent);
-    await sendDigest(negative);
+    await sendUrgentAlert(urgent); // real-time, every run
+
+    if (isDigestRun()) {
+      const todaysNegative = await getTodaysNegativeMentions();
+      await sendDailyDigest(todaysNegative);
+    } else {
+      console.log('Not the digest run (before ~4pm Melbourne) -- skipping daily digest email.');
+    }
   } catch (err) {
     console.error('Classification/alerting failed:', err.message);
   }
