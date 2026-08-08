@@ -1,4 +1,5 @@
 const { runActor } = require('../apifyClient');
+const { matchesPhrase } = require('../textMatch');
 
 // Overridable in case this actor gets deprecated/renamed -- see README.
 const ACTOR_ID = process.env.APIFY_REDDIT_ACTOR_ID || 'trudax/reddit-scraper-lite';
@@ -6,10 +7,6 @@ const ACTOR_ID = process.env.APIFY_REDDIT_ACTOR_ID || 'trudax/reddit-scraper-lit
 function subreddits() {
   const raw = process.env.APIFY_REDDIT_SUBREDDITS || 'melbourne,australia';
   return raw.split(',').map((s) => s.trim()).filter(Boolean);
-}
-
-function matchesQuery(text, query) {
-  return text.toLowerCase().includes(query.toLowerCase());
 }
 
 // Scoped to specific communities (APIFY_REDDIT_SUBREDDITS) rather than a
@@ -38,7 +35,7 @@ async function fetchMentions(sinceDate) {
   return (items || [])
     .filter((d) => !d.parentId) // comment objects carry a parentId, posts don't
     .filter((d) => !d.createdAt || new Date(d.createdAt) >= sinceDate)
-    .filter((d) => matchesQuery(`${d.title || ''} ${d.body || ''}`, query))
+    .filter((d) => matchesPhrase(`${d.title || ''} ${d.body || ''}`, query))
     .map((d) => ({
       source: 'reddit',
       external_id: d.id || d.parsedId || d.url,

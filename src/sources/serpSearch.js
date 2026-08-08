@@ -1,4 +1,5 @@
 const { runActor } = require('../apifyClient');
+const { matchesPhrase } = require('../textMatch');
 
 // Overridable in case this actor gets deprecated/renamed -- see README.
 const ACTOR_ID = process.env.APIFY_GOOGLE_SEARCH_ACTOR_ID || 'apify/google-search-scraper';
@@ -48,6 +49,9 @@ async function fetchMentions() {
   for (const item of items || []) {
     for (const r of item.organicResults || []) {
       if (!r.url) continue;
+      // Quoted queries usually get Google to honor exact phrase, but not
+      // always -- enforce it ourselves too rather than trust that fully.
+      if (!matchesPhrase(`${r.title || ''} ${r.description || ''}`, query)) continue;
       results.push({
         source: classifySource(r.url),
         external_id: r.url,

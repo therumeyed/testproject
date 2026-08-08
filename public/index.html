@@ -88,6 +88,10 @@
   a { color: var(--accent); text-decoration: none; }
   a:hover { text-decoration: underline; }
   .empty { color: var(--muted); padding: 24px; text-align: center; }
+  .mention-link { color: inherit; text-decoration: none; display: block; }
+  .mention-link:hover .mention-title { text-decoration: underline; }
+  .mention-title { font-weight: 600; color: var(--accent); margin-bottom: 2px; }
+  .mention-snippet { color: var(--text); font-size: 12.5px; line-height: 1.4; }
 </style>
 </head>
 <body>
@@ -201,8 +205,11 @@ async function loadMentions(days, source) {
   tbody.innerHTML = rows.map(r => {
     const m = meta(r.source);
     const when = new Date(r.first_seen_at).toLocaleString('en-AU', { timeZone: 'Australia/Melbourne' });
-    const text = r.title || r.snippet || '(no text)';
-    const link = r.url ? `<a href="${r.url}" target="_blank" rel="noopener">${escapeHtml(text)}</a>` : escapeHtml(text);
+    const titleHtml = r.title ? `<div class="mention-title">${escapeHtml(r.title)}</div>` : '';
+    const snippetText = r.snippet ? (r.snippet.length > 220 ? r.snippet.slice(0, 220) + '…' : r.snippet) : '';
+    const snippetHtml = snippetText ? `<div class="mention-snippet">${escapeHtml(snippetText)}</div>` : '';
+    const body = titleHtml + snippetHtml || '(no text)';
+    const link = r.url ? `<a href="${r.url}" target="_blank" rel="noopener" class="mention-link">${body}</a>` : body;
     return `<tr>
       <td class="source"><span class="badge" style="background:${m.color}">${m.label}</span></td>
       <td>${when}</td>

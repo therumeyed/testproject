@@ -1,4 +1,5 @@
 const { runActor } = require('../apifyClient');
+const { matchesPhrase } = require('../textMatch');
 
 // Overridable in case this actor gets deprecated/renamed -- see README.
 const ACTOR_ID = process.env.APIFY_YOUTUBE_ACTOR_ID || 'streamers/youtube-scraper';
@@ -23,6 +24,10 @@ async function fetchMentions(sinceDate) {
 
   return (items || [])
     .filter((d) => !d.date || new Date(d.date) >= sinceDay)
+    // YouTube's own search doesn't honor an exact-phrase query -- it can match
+    // videos containing "Melbourne" and "Airport" separately, so enforce the
+    // literal phrase ourselves.
+    .filter((d) => matchesPhrase(`${d.title || ''} ${d.text || ''}`, query))
     .map((d) => ({
       source: 'youtube',
       external_id: d.id || d.url,

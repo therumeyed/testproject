@@ -1,4 +1,5 @@
 const { runActor } = require('../apifyClient');
+const { matchesPhrase } = require('../textMatch');
 
 // Overridable in case this actor gets deprecated/renamed -- see README.
 const ACTOR_ID = process.env.APIFY_FACEBOOK_ACTOR_ID || 'scrapeforge/facebook-search-posts';
@@ -35,6 +36,7 @@ async function fetchMentions(sinceDate) {
   return (items || [])
     .map((d) => ({ ...d, posted_at: parseTimestamp(d.timestamp) }))
     .filter((d) => !d.posted_at || new Date(d.posted_at) >= sinceDate)
+    .filter((d) => matchesPhrase(d.message, query))
     .map((d) => ({
       source: 'facebook_direct',
       external_id: d.post_id || d.url,
