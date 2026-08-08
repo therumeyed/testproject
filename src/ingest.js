@@ -48,13 +48,16 @@ async function sendUrgentAlert(urgentMentions) {
   for (const m of urgentMentions) await markAlerted(m.id);
 }
 
-async function sendDailyDigest(negativeMentions) {
+// Sent every run, not literally once/day -- when the cron runs multiple
+// times a day, each run's digest covers only what that run found (already
+// deduped against every prior run), not a rolled-up full-day summary.
+async function sendDigest(negativeMentions) {
   const html = negativeMentions.length === 0
-    ? `<h2>Melbourne Airport mentions -- daily digest</h2><p>No negative mentions found today.</p>`
-    : `<h2>Melbourne Airport mentions -- daily digest</h2>
-       <p>${negativeMentions.length} negative mention${negativeMentions.length > 1 ? 's' : ''} found today across all sources.</p>
+    ? `<h2>Melbourne Airport mentions -- check-in</h2><p>No negative mentions found in this check.</p>`
+    : `<h2>Melbourne Airport mentions -- check-in</h2>
+       <p>${negativeMentions.length} negative mention${negativeMentions.length > 1 ? 's' : ''} found in this check across all sources.</p>
        ${negativeMentions.map(mentionRowHtml).join('')}`;
-  await sendEmail({ subject: `Daily negative mentions digest -- ${negativeMentions.length} found`, html });
+  await sendEmail({ subject: `Negative mentions -- ${negativeMentions.length} found`, html });
 }
 
 // Rolling 24h window, run once a day by the Render cron job. Each source
@@ -105,7 +108,7 @@ async function run() {
     console.log(`Classified ${classified.length} mentions: ${negative.length} negative (${urgent.length} high severity).`);
 
     await sendUrgentAlert(urgent);
-    await sendDailyDigest(negative);
+    await sendDigest(negative);
   } catch (err) {
     console.error('Classification/alerting failed:', err.message);
   }

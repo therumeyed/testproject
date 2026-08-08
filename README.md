@@ -80,12 +80,16 @@ This repo includes `render.yaml`, so Render can provision everything from one Bl
 1. Push this repo to GitHub (already done if you're reading this from the branch).
 2. In Render, choose **New → Blueprint**, point it at this repo/branch. It will create:
    - a **web service** (the dashboard, `melair-mentions-dashboard`)
-   - a **cron job** (`melair-mentions-ingest`, runs daily at 20:00 UTC ≈ 6-7am Melbourne)
+   - a **cron job** (`melair-mentions-ingest`, runs 3x/day — 9am, 1pm, 5pm Melbourne time)
    - a **Postgres database** (`melair-mentions-db`), wired to both automatically via `DATABASE_URL`
 3. Render will prompt you for the values in the `melair-mentions-secrets` group (`APIFY_TOKEN`, `APIFY_GOOGLE_PLACE_IDS`, and the Facebook/Instagram keys) — fill in what you have now, add the rest later once you have them (Environment → edit the group → redeploy, no code changes needed).
 4. Once deployed, open the web service's URL to see the dashboard.
 
-To change the daily run time, edit the `schedule` cron expression in `render.yaml` (it's UTC).
+**Cron schedule:** `render.yaml`'s `schedule` field is UTC-only — Render has no timezone/DST awareness. The current value (`0 23,3,7 * * *`) hits 9am/1pm/5pm Melbourne time during AEST (UTC+10, roughly Apr-Oct). During AEDT (UTC+11, roughly Oct-Apr) it'll fire an hour early local time unless shifted to `0 22,2,6 * * *` — worth updating at each daylight-saving change, there's a comment in the file with both values.
+
+**Running 3x/day roughly triples the Apify actor spend** versus once/day — most of these actors bill per run or per result regardless of whether anything new turns up, so three checks means paying for three fetches even on runs that find nothing. Worth keeping an eye on Apify's usage dashboard after the first week at this cadence.
+
+**Email behavior at this cadence:** the urgent alert fires on every run that finds a high-severity negative (matching the "notify quickly" ask). The negative-mentions digest also now sends every run — so up to 3 emails/day, each covering only what that specific run found (already deduped against every prior run) — rather than one true daily rollup. If a single once-a-day summary is preferred instead, that's a straightforward change (aggregate by day instead of by run) — just say so.
 
 ## 4. Sentiment classification and email alerts
 

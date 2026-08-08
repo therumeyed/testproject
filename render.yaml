@@ -42,7 +42,11 @@ services:
     name: melair-mentions-ingest
     runtime: node
     plan: starter
-    schedule: "0 20 * * *" # 20:00 UTC = 6am (AEST) / 7am (AEDT) Melbourne
+    # 23:00, 03:00, 07:00 UTC = 9am, 1pm, 5pm AEST (Melbourne, UTC+10).
+    # Render cron is UTC-only, no DST awareness -- during AEDT (UTC+11,
+    # ~Oct-Apr) these run an hour early local time. To correct for AEDT,
+    # shift each by -1h: "0 22,2,6 * * *". Revisit at each DST change.
+    schedule: "0 23,3,7 * * *"
     buildCommand: npm install
     startCommand: node src/ingest.js
     envVars:
