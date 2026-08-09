@@ -5,19 +5,18 @@ const NAV_ITEMS = [
   { href: '/explorer.html', label: 'Trend Explorer' },
   { href: '/history.html', label: 'Trend History' },
   { href: '/compare.html', label: 'Compare' },
-  { href: '/admin.html', label: 'Admin', adminOnly: true }
+  { href: '/admin.html', label: 'Admin' }
 ];
 
+// No login gate -- open to anyone with the URL. See src/lib/auth.js for
+// why req.user still exists (audit-log attribution only, not access
+// control).
 async function api(path, opts = {}) {
   const res = await fetch(path, {
     ...opts,
     headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
     body: opts.body ? JSON.stringify(opts.body) : undefined
   });
-  if (res.status === 401) {
-    window.location.href = '/login.html';
-    throw new Error('not authenticated');
-  }
   if (!res.ok) {
     const text = await res.text().catch(() => res.statusText);
     throw new Error(text || `Request failed: ${res.status}`);
@@ -26,16 +25,7 @@ async function api(path, opts = {}) {
   return ct.includes('application/json') ? res.json() : res.text();
 }
 
-async function requireSession() {
-  try {
-    return await api('/api/me');
-  } catch {
-    window.location.href = '/login.html';
-    throw new Error('redirecting');
-  }
-}
-
-function renderNav(activeHref, user) {
+function renderNav(activeHref) {
   const nav = document.createElement('div');
   nav.className = 'nav';
   const brand = document.createElement('div');
@@ -43,7 +33,6 @@ function renderNav(activeHref, user) {
   brand.innerHTML = 'Sportsgirl <span>Beauty Radar</span>';
   nav.appendChild(brand);
   for (const item of NAV_ITEMS) {
-    if (item.adminOnly && user?.role !== 'admin') continue;
     const a = document.createElement('a');
     a.href = item.href;
     a.textContent = item.label;
@@ -53,22 +42,16 @@ function renderNav(activeHref, user) {
   const spacer = document.createElement('div');
   spacer.className = 'spacer';
   nav.appendChild(spacer);
-  const userDiv = document.createElement('div');
-  userDiv.className = 'user';
-  userDiv.innerHTML = `<span>${user?.email || ''} ${user?.role === 'admin' ? '(admin)' : ''}</span>`;
-  const logoutBtn = document.createElement('button');
-  logoutBtn.className = 'secondary';
-  logoutBtn.textContent = 'Sign out';
-  logoutBtn.onclick = async () => { await api('/api/logout', { method: 'POST' }); window.location.href = '/login.html'; };
-  userDiv.appendChild(logoutBtn);
-  nav.appendChild(userDiv);
   document.body.prepend(nav);
 }
 
 async function initPage(activeHref) {
-  const user = await requireSession();
-  renderNav(activeHref, user);
-  return user;
+  renderNav(activeHref);
+  try {
+    return await api('/api/me');
+  } catch {
+    return { email: null, role: 'admin' };
+  }
 }
 
 function esc(s) {

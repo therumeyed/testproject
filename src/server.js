@@ -4,12 +4,13 @@ const path = require('path');
 const { pool, initSchemaForever } = require('./db');
 const { seedConfig, getConfig, getAllConfig, setConfig } = require('./config/seedConfig');
 const { listTrends, getTrendDetail, ACTION_LABELS } = require('./lib/trendQueries');
-const { createSessionCookie, clearCookieHeader, requireAuth, requireAdmin, getSessionFromRequest } = require('./lib/auth');
+const { attachIdentity } = require('./lib/auth');
 const { toCsv } = require('./lib/csv');
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
 app.use(express.static(path.join(__dirname, '..', 'public')));
+app.use(attachIdentity);
 
 async function writeAudit(req, action, entityType, entityId, before, after, reason) {
   await pool.query(
@@ -19,7 +20,7 @@ async function writeAudit(req, action, entityType, entityId, before, after, reas
 }
 
 // ---------------------------------------------------------------------
-// Health + auth
+// Health
 // ---------------------------------------------------------------------
 // Set once the database schema is confirmed reachable (see bottom of this
 // file). Deliberately independent of app.listen() -- on a fresh Render
@@ -31,38 +32,15 @@ let dbReady = false;
 
 app.get('/api/health', (req, res) => res.json({ ok: true, dbReady }));
 
-app.get('/api/me', (req, res) => {
-  const session = getSessionFromRequest(req);
-  if (!session) return res.status(401).json({ error: 'not_authenticated' });
-  res.json({ email: session.email, role: session.role });
-});
+app.get('/api/me', (req, res) => res.json(req.user));
 
-app.post('/api/login', (req, res) => {
-  const { email, password } = req.body || {};
-  if (!email || !/^\S+@\S+\.\S+$/.test(email)) return res.status(400).json({ error: 'valid email required' });
-  if (!process.env.APP_ACCESS_PASSWORD || password !== process.env.APP_ACCESS_PASSWORD) {
-    return res.status(401).json({ error: 'invalid_password' });
-  }
-  const { role, cookieHeader } = createSessionCookie(email);
-  res.setHeader('Set-Cookie', cookieHeader);
-  res.json({ email, role });
-});
-
-app.post('/api/logout', (req, res) => {
-  res.setHeader('Set-Cookie', clearCookieHeader());
-  res.json({ ok: true });
-});
-
-// Login/logout/me above don't touch the database, so they work during
-// startup too. Everything from here on does, so fail fast and clearly
-// instead of letting individual routes throw ECONNREFUSED as 500s.
+// Everything below touches the database, so fail fast and clearly instead
+// of letting individual routes throw ECONNREFUSED as 500s while it's still
+// starting up.
 app.use('/api', (req, res, next) => {
   if (!dbReady) return res.status(503).json({ error: 'starting_up', message: 'The service is still starting up. Please retry in a few seconds.' });
   next();
 });
-
-// Everything below requires a signed-in session.
-app.use('/api', requireAuth);
 
 // ---------------------------------------------------------------------
 // Source health
@@ -241,7 +219,6 @@ app.get('/api/export/buying-shortlist.csv', (req, res) => exportShortlist(req, r
 // Admin
 // ---------------------------------------------------------------------
 const admin = express.Router();
-admin.use(requireAdmin);
 
 admin.get('/config', async (req, res) => res.json(await getAllConfig()));
 admin.put('/config/:key', async (req, res) => {

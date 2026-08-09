@@ -15,14 +15,11 @@ envVarGroups:
         value: "60"
       - key: ANTHROPIC_API_KEY
         sync: false
+      # No login gate -- open to anyone with the service URL, by request.
+      # ADMIN_EMAILS is only used to attribute audit-log/workflow-action
+      # entries to a default identity, not for access control.
       - key: ADMIN_EMAILS
         value: nitin4747@gmail.com
-      - key: APP_ACCESS_PASSWORD
-        sync: false
-      - key: SESSION_SECRET
-        generateValue: true
-      - key: ADMIN_TOKEN
-        generateValue: true
 
 services:
   - type: web

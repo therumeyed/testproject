@@ -68,13 +68,13 @@ See `src/scoring.js` for the full, commented implementation. In short:
 - **Social Opportunity**, **Buying Opportunity** and **Confidence** are three independent 0-100 scores, each built from named, weighted components (log/percentile-scaled so one viral post or one dominant creator can't flatten every other topic), with saturation and safety penalties. Every component carries a plain-language explanation string, surfaced as "Why this score?" on the Trend Detail page.
 - Platform metrics are **never summed into one misleading cross-platform total** -- TikTok plays, Instagram plays, Reddit discussion volume and the Google Trends index are always shown separately, including in the Compare view.
 
-## 6. Auth model (MVP)
+## 6. Auth model
 
-A single shared access password (`APP_ACCESS_PASSWORD`) gates sign-in; the signed-in email decides role (`ADMIN_EMAILS` → admin, everyone else → standard client, matching the doc's "separate administrator and standard client permissions" requirement). Sessions are a signed HMAC cookie, no external session store. This is intentionally lightweight for an MVP review build -- swap for real SSO (Google Workspace, Okta, etc.) before a wider production rollout, per the doc's security/privacy section.
+**There is currently no login gate.** The tool is open to anyone with the URL, by request, for use with a small trusted internal team -- that includes full write access (taxonomy, score weights, merging/suppressing trends, product catalogue) since there's no way to distinguish who's making a change. `ADMIN_EMAILS` (`src/lib/auth.js`) is only used to label audit-log/workflow-action entries with a default identity, not to restrict access. Before sharing the link more widely, put a real access boundary back in front of it -- SSO (Google Workspace, Okta, etc.) is the natural fit given this is an internal tool, per the doc's security/privacy section.
 
 ## 7. Deploy to Render
 
-`render.yaml` provisions a web service, a daily cron job (`node src/ingest.js`, scheduled for well before the AU business day), and a Postgres database in one Blueprint. Fill in `APIFY_TOKEN`, `ANTHROPIC_API_KEY` and `APP_ACCESS_PASSWORD` in the `sportsgirl-beauty-radar-secrets` env var group after the first deploy.
+`render.yaml` provisions a web service, a daily cron job (`node src/ingest.js`, scheduled for well before the AU business day), and a Postgres database in one Blueprint. Fill in `APIFY_TOKEN` and `ANTHROPIC_API_KEY` in the `sportsgirl-beauty-radar-secrets` env var group after the first deploy.
 
 ## 8. Extending later (Phase 2/3, per the doc's own roadmap)
 
