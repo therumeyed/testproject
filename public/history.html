@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Trend History — Sportsgirl Beauty Radar</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+<div class="wrap">
+  <h1>Trend History</h1>
+  <p class="subtitle">Dated snapshot of rankings, stages, scores and recommendations.</p>
+
+  <div class="filters">
+    <label style="font-size:12.5px;color:var(--muted);">Date:</label>
+    <select id="fDate"></select>
+  </div>
+
+  <table>
+    <thead><tr><th>Rank</th><th>Movement</th><th>Trend</th><th>Category</th><th>Stage</th><th>Durability</th><th>Social</th><th>Buying</th><th>Confidence</th></tr></thead>
+    <tbody id="rows"><tr><td colspan="9" class="loading">Loading…</td></tr></tbody>
+  </table>
+
+  <h2>Recent workflow actions</h2>
+  <div class="card" id="actions"><div class="loading">Loading…</div></div>
+</div>
+
+<script src="/js/app.js"></script>
+<script>
+function rank(list) {
+  return [...list].sort((a, b) => (Number(b.social_score || 0) + Number(b.buying_score || 0)) - (Number(a.social_score || 0) + Number(a.buying_score || 0)));
+}
+
+async function loadDate(date, dates) {
+  const rows = rank(await api('/api/history?date=' + date));
+  const idx = dates.indexOf(date);
+  const prevDate = dates[idx + 1]; // dates sorted desc, so next index is older
+  let prevRanked = [];
+  if (prevDate) prevRanked = rank(await api('/api/history?date=' + prevDate));
+  const prevRankMap = new Map(prevRanked.map((r, i) => [r.id, i + 1]));
+
+  document.getElementById('rows').innerHTML = rows.length ? rows.map((r, i) => {
+    const prevRank = prevRankMap.get(r.id);
+    let movement = '<span style="color:var(--good)">NEW</span>';
+    if (prevRank) {
+      const delta = prevRank - (i + 1);
+      movement = delta > 0 ? `<span style="color:var(--good)">↑ ${delta}</span>` : delta < 0 ? `<span style="color:var(--bad)">↓ ${Math.abs(delta)}</span>` : '— steady';
+    }
+    return `<tr>
+      <td>${i + 1}</td><td>${movement}</td>
+      <td><a href="/trend.html?id=${r.id}">${esc(r.name)}</a></td>
+      <td>${esc((r.parent_category || '').replace(/_/g, ' '))}</td>
+      <td>${stageBadge(r.lifecycle_stage)}</td><td>${durabilityBadge(r.durability_label)}</td>
+      <td>${r.social_score ?? '—'}</td><td>${r.buying_score ?? '—'}</td><td>${r.confidence_score ?? '—'}</td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="9" class="empty">No scored trends for this date.</td></tr>';
+}
+
+(async function () {
+  await initPage('/history.html');
+  const dates = await api('/api/history/dates');
+  const select = document.getElementById('fDate');
+  select.innerHTML = dates.map((d) => `<option value="${d}">${fmtDate(d)}</option>`).join('');
+  if (dates.length === 0) { document.getElementById('rows').innerHTML = '<tr><td colspan="9" class="empty">No history yet.</td></tr>'; return; }
+  await loadDate(dates[0], dates);
+  select.addEventListener('change', () => loadDate(select.value, dates));
+
+  const actions = await api('/api/workflow-actions');
+  document.getElementById('actions').innerHTML = actions.length ? `<table><thead><tr><th>When</th><th>Entity</th><th>Action</th><th>From → To</th><th>By</th><th>Note</th></tr></thead><tbody>
+    ${actions.map((a) => `<tr><td>${fmtDate(a.created_at)}</td><td>${esc(a.entity_type)} #${a.entity_id}</td><td>${esc(a.action)}</td><td>${esc(a.from_status || '')} → ${esc(a.to_status || '')}</td><td>${esc(a.user_email || '')}</td><td>${esc(a.note || '')}</td></tr>`).join('')}
+  </tbody></table>` : '<div class="empty">No workflow actions recorded yet.</div>';
+})();
+</script>
+</body>
+</html>

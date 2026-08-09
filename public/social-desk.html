@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Social Content Desk — Sportsgirl Beauty Radar</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+<div class="wrap">
+  <div class="section-head">
+    <div><h1>Social Content Desk</h1><p class="subtitle">Sportsgirl-specific content ideas generated only from supported trends.</p></div>
+    <a class="btn secondary" href="/api/export/social-shortlist.csv">Export shortlist CSV</a>
+  </div>
+
+  <div class="filters">
+    <select id="fCategory"><option value="">All categories</option><option value="beauty_tools_accessories">Beauty Tools &amp; Accessories</option><option value="cosmetics">Cosmetics</option><option value="beauty_gift_packs">Beauty Gift Packs</option></select>
+    <select id="fStatus"><option value="">All statuses</option><option value="new">New</option><option value="shortlisted">Shortlisted</option><option value="planned">Planned</option><option value="published">Published</option><option value="dismissed">Dismissed</option></select>
+    <select id="fEffort"><option value="">Any effort</option><option value="low">Low effort</option><option value="medium">Medium effort</option><option value="high">High effort</option></select>
+    <select id="fShelf"><option value="">Any shelf life</option><option value="post within 48 hours">Post within 48 hours</option><option value="this week">This week</option><option value="evergreen">Evergreen</option></select>
+  </div>
+
+  <div id="list" class="card-grid"><div class="loading">Loading…</div></div>
+</div>
+
+<script src="/js/app.js"></script>
+<script>
+let ALL = [];
+
+function ideaCard(r) {
+  const p = r.payload;
+  return `<div class="card">
+    <div class="top-row">
+      <div>
+        <div class="name">${esc(p.title)}</div>
+        <div class="def">Trend: <a href="/trend.html?id=${r.trend_id}">${esc(r.trend_name)}</a></div>
+      </div>
+      <span class="badge neutral">${esc(p.format || '')}</span>
+    </div>
+    <p><b>Hook:</b> ${esc(p.hook || '')}</p>
+    <p><b>Angle:</b> ${esc(p.contentAngle || '')}</p>
+    <p><b>Visual execution:</b> ${esc(p.visualExecution || '')}</p>
+    <p><b>Structure:</b> ${esc(p.structureGuidance || '')}</p>
+    <p><b>Caption direction:</b> ${esc(p.captionDirection || '')}</p>
+    <p><b>Hashtags:</b> ${(p.hashtags || []).map((h) => '#' + esc(h)).join(' ')}</p>
+    <p><b>Treatment:</b> ${esc(p.treatmentType || '—')} · <b>Product:</b> ${esc(p.productMatch || '—')}</p>
+    ${p.riskNotes ? `<p><b>Risk/sensitivity:</b> ${esc(p.riskNotes)}</p>` : ''}
+    <div class="meta-row">
+      <span>Effort: ${esc(p.effortLevel || '—')}</span> · <span>Shelf life: ${esc(p.shelfLife || '—')}</span> · <span>Why now: ${esc(p.whyNow || '—')}</span>
+    </div>
+    <div class="filters" style="margin-top:10px;">
+      <select data-field="status" data-id="${r.id}">
+        ${['new', 'shortlisted', 'planned', 'published', 'dismissed'].map((s) => `<option value="${s}" ${r.status === s ? 'selected' : ''}>${s}</option>`).join('')}
+      </select>
+      <input data-field="owner" data-id="${r.id}" placeholder="Owner" value="${esc(r.owner || '')}" style="padding:6px 8px;border:1px solid var(--border);border-radius:6px;" />
+    </div>
+  </div>`;
+}
+
+function render() {
+  const cat = document.getElementById('fCategory').value;
+  const status = document.getElementById('fStatus').value;
+  const effort = document.getElementById('fEffort').value;
+  const shelf = document.getElementById('fShelf').value;
+  const filtered = ALL.filter((r) =>
+    (!cat || r.parent_category === cat) &&
+    (!status || r.status === status) &&
+    (!effort || r.payload.effortLevel === effort) &&
+    (!shelf || r.payload.shelfLife === shelf)
+  );
+  document.getElementById('list').innerHTML = filtered.length ? filtered.map(ideaCard).join('') : '<div class="empty">No ideas match these filters.</div>';
+
+  document.querySelectorAll('[data-field]').forEach((el) => {
+    el.addEventListener('change', async (e) => {
+      const id = e.target.dataset.id, field = e.target.dataset.field;
+      await api(`/api/recommendations/${id}`, { method: 'PATCH', body: { [field]: e.target.value } });
+    });
+  });
+}
+
+(async function () {
+  await initPage('/social-desk.html');
+  ALL = await api('/api/recommendations?type=social_idea');
+  render();
+  ['fCategory', 'fStatus', 'fEffort', 'fShelf'].forEach((id) => document.getElementById(id).addEventListener('change', render));
+})();
+</script>
+</body>
+</html>

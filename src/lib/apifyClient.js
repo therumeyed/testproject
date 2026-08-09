@@ -1,5 +1,4 @@
 const APIFY_API_BASE = 'https://api.apify.com/v2';
-
 const TERMINAL_STATUSES = ['SUCCEEDED', 'FAILED', 'TIMED-OUT', 'ABORTED'];
 
 // Apify actor IDs are "author/name" but the REST API path wants "author~name".
@@ -18,10 +17,9 @@ async function startRun(actorId, input) {
   return (await res.json()).data;
 }
 
-// The run-sync-get-dataset-items endpoint hard-caps at 300s server-side --
-// some actors (Instagram hashtag scraping in particular) routinely run
-// longer than that, so poll an async run instead of using that endpoint.
-// 10 min default -- observed Instagram hashtag runs taking ~6:10 in practice.
+// run-sync-get-dataset-items hard-caps at 300s server-side; several beauty
+// hashtag/keyword scrapes run longer than that in practice, so poll an async
+// run instead of relying on that endpoint.
 async function waitForRun(runId, { pollMs = 5000, maxWaitMs = 10 * 60 * 1000 } = {}) {
   const token = process.env.APIFY_TOKEN;
   const deadline = Date.now() + maxWaitMs;

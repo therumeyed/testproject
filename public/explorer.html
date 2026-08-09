@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Trend Explorer — Sportsgirl Beauty Radar</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+<div class="wrap">
+  <div class="section-head">
+    <div><h1>Trend Explorer</h1><p class="subtitle">All active and historical trends.</p></div>
+    <a class="btn secondary" href="/api/export/trends.csv">Export CSV</a>
+  </div>
+
+  <div class="filters">
+    <input id="fSearch" placeholder="Search trend name…" style="min-width:200px;" />
+    <select id="fCategory"><option value="">All categories</option><option value="beauty_tools_accessories">Beauty Tools &amp; Accessories</option><option value="cosmetics">Cosmetics</option><option value="beauty_gift_packs">Beauty Gift Packs</option></select>
+    <select id="fStage"><option value="">All stages</option><option value="new_signal">New signal</option><option value="emerging">Emerging</option><option value="accelerating">Accelerating</option><option value="peaking">Peaking</option><option value="sustained">Sustained</option><option value="cooling">Cooling</option><option value="recurring_seasonal">Recurring/seasonal</option></select>
+    <select id="fDurability"><option value="">All durability</option><option value="flash">Flash</option><option value="early">Early</option><option value="validated">Validated</option><option value="sustained">Sustained</option><option value="established">Established/seasonal</option></select>
+    <select id="fAu"><option value="">Any AU state</option><option value="confirmed">AU confirmed</option><option value="emerging">AU emerging</option><option value="absent">AU absent</option><option value="unavailable">AU unknown</option></select>
+    <label style="font-size:12.5px;color:var(--muted);"><input type="checkbox" id="fSuppressed" /> include suppressed (admin)</label>
+  </div>
+
+  <table>
+    <thead><tr>
+      <th>Rank</th><th>Trend</th><th>Category</th><th>Stage</th><th>Age</th><th>Consecutive</th>
+      <th>Platforms</th><th>Google Trends</th><th>Social</th><th>Buying</th><th>Confidence</th><th>Action</th>
+    </tr></thead>
+    <tbody id="rows"><tr><td colspan="12" class="loading">Loading…</td></tr></tbody>
+  </table>
+</div>
+
+<script src="/js/app.js"></script>
+<script>
+let user;
+
+function row(t, i) {
+  const platformStr = (t.platforms || []).map((p) => `${p.platform[0].toUpperCase()}`).join(' ') || '—';
+  return `<tr>
+    <td>${i + 1}</td>
+    <td><a href="/trend.html?id=${t.id}"><b>${esc(t.name)}</b></a>${t.status === 'suppressed' ? ' <span class="badge fit-out_of_scope">suppressed</span>' : ''}</td>
+    <td>${esc((t.parentCategory || '').replace(/_/g, ' '))}</td>
+    <td>${stageBadge(t.lifecycleStage)}</td>
+    <td>${t.trendAgeDays ?? '—'}d</td>
+    <td>${t.consecutiveActiveDays ?? '—'}d</td>
+    <td title="${esc(platformEvidenceLine(t.platforms))}">${platformStr}</td>
+    <td>${t.googleTrends?.hasData ? (t.googleTrends.auDirection === 'up' ? '↑ rising' : t.googleTrends.auDirection === 'down' ? '↓ falling' : '→ flat') : '—'}</td>
+    <td>${t.socialScore ?? '—'}</td>
+    <td>${t.buyingScore ?? '—'}</td>
+    <td>${t.confidenceScore ?? '—'}</td>
+    <td>${esc(t.recommendedActionLabel || '—')}</td>
+  </tr>`;
+}
+
+async function load() {
+  const params = new URLSearchParams();
+  if (document.getElementById('fSearch').value) params.set('q', document.getElementById('fSearch').value);
+  if (document.getElementById('fCategory').value) params.set('category', document.getElementById('fCategory').value);
+  if (document.getElementById('fStage').value) params.set('stage', document.getElementById('fStage').value);
+  if (document.getElementById('fDurability').value) params.set('durability', document.getElementById('fDurability').value);
+  if (document.getElementById('fAu').value) params.set('auState', document.getElementById('fAu').value);
+  if (user?.role === 'admin' && document.getElementById('fSuppressed').checked) params.set('includeSuppressed', 'true');
+
+  const trends = await api('/api/trends?' + params.toString());
+  document.getElementById('rows').innerHTML = trends.length ? trends.map(row).join('') : '<tr><td colspan="12" class="empty">No trends match these filters.</td></tr>';
+}
+
+(async function () {
+  user = await initPage('/explorer.html');
+  if (user.role !== 'admin') document.getElementById('fSuppressed').parentElement.style.display = 'none';
+  await load();
+  ['fCategory', 'fStage', 'fDurability', 'fAu', 'fSuppressed'].forEach((id) => document.getElementById(id).addEventListener('change', load));
+  let t;
+  document.getElementById('fSearch').addEventListener('input', () => { clearTimeout(t); t = setTimeout(load, 300); });
+})();
+</script>
+</body>
+</html>

@@ -1,14 +1,15 @@
 {
-  "name": "melair-mentions-dashboard",
-  "version": "1.0.0",
+  "name": "sportsgirl-beauty-radar",
+  "version": "0.1.0",
   "private": true,
-  "description": "Tracks public mentions of Melbourne Airport across Reddit, YouTube, web/Facebook/Instagram/LinkedIn search results, and MelAir's own Facebook/Instagram comments.",
+  "description": "Beauty trend intelligence tool for Sportsgirl -- identifies, measures and explains online beauty trends from TikTok, Instagram, Reddit and Google Trends, and turns them into Sportsgirl-specific social and buying recommendations.",
   "engines": {
     "node": ">=18"
   },
   "scripts": {
     "start": "node src/server.js",
-    "ingest": "node src/ingest.js"
+    "ingest": "node src/ingest.js",
+    "seed-demo": "node src/seedDemo.js"
   },
   "dependencies": {
     "dotenv": "^16.4.5",

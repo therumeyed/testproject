@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Trend detail — Sportsgirl Beauty Radar</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+<div class="wrap" id="content"><div class="loading">Loading…</div></div>
+
+<script src="/js/app.js"></script>
+<script>
+function whyList(components) {
+  if (!components || components.length === 0) return '<div class="empty">No components recorded.</div>';
+  return `<ul class="why-list">${components.map((c) => `<li><span class="expl">${esc(c.explanation)}</span><span class="val">${c.contribution >= 0 ? '+' : ''}${c.contribution}</span></li>`).join('')}</ul>`;
+}
+
+function evidenceItem(e) {
+  return `<div class="evidence-item">
+    <div class="thumb"></div>
+    <div class="body">
+      <div><b>${esc(e.platform)}</b> · ${esc(e.handle || 'unknown creator')} ${e.follower_count ? `(${fmtNum(e.follower_count)} followers)` : ''} · ${fmtDate(e.publish_ts)}</div>
+      <div>${esc((e.caption || '').slice(0, 200))}</div>
+      <div style="color:var(--muted)">plays ${fmtNum(e.play_count)} · likes ${fmtNum(e.like_count)} · comments ${fmtNum(e.comment_count)} ${e.share_count != null ? '· shares ' + fmtNum(e.share_count) : ''}</div>
+      ${e.url ? `<a href="${esc(e.url)}" target="_blank" rel="noopener">Open source →</a>` : ''}
+    </div>
+  </div>`;
+}
+
+function recCard(r) {
+  if (r.rec_type === 'social_idea') {
+    const p = r.payload;
+    return `<div class="card"><h3>Social idea: ${esc(p.title)}</h3>
+      <p><b>Format:</b> ${esc(p.format || '—')} · <b>Hook:</b> ${esc(p.hook || '')}</p>
+      <p>${esc(p.contentAngle || '')}</p>
+      <p><b>Visual:</b> ${esc(p.visualExecution || '')}</p>
+      <p><b>Effort:</b> ${esc(p.effortLevel || '—')} · <b>Shelf life:</b> ${esc(p.shelfLife || '—')} · <b>Status:</b> ${esc(r.status)}</p>
+    </div>`;
+  }
+  const p = r.payload;
+  return `<div class="card"><h3>Buying opportunity: ${esc(p.productOpportunity)}</h3>
+    <p><b>Attributes:</b> ${esc(p.attributes || '')}</p>
+    <p><b>Persistence:</b> ${esc(p.evidenceOfPersistence || '')}</p>
+    <p><b>Purchase intent:</b> ${esc(p.purchaseIntentEvidence || '')}</p>
+    <p><b>Window:</b> ${esc(p.opportunityWindow || '')} · <b>Lead-time risk:</b> ${esc(p.leadTimeRisk || '—')}</p>
+    <p><b>Suggested action:</b> ${esc((p.suggestedAction || '').replace(/_/g, ' '))} · <b>Status:</b> ${esc(r.status)}</p>
+    <p style="color:var(--muted)">${esc(p.reasoning || '')}</p>
+  </div>`;
+}
+
+async function submitFeedback(id, isRelevant) {
+  await api(`/api/trends/${id}/feedback`, { method: 'POST', body: { isRelevant } });
+  alert('Thanks -- feedback recorded.');
+}
+
+async function render(id) {
+  const t = await api(`/api/trends/${id}`);
+  document.title = `${t.name} — Sportsgirl Beauty Radar`;
+
+  const conv = t.conversationSummary || {};
+  const dailyByPlatform = {};
+  (t.dailySeries || []).forEach((r) => {
+    dailyByPlatform[r.platform] = dailyByPlatform[r.platform] || [];
+    dailyByPlatform[r.platform].push({ date: r.metric_date, value: Number(r.plays_new || r.new_posts || 0) });
+  });
+  const scoreSeries = (t.scoreHistory || []).map((r) => ({ date: r.score_date, value: Number(r.social_score || 0) }));
+  const buyingSeries = (t.scoreHistory || []).map((r) => ({ date: r.score_date, value: Number(r.buying_score || 0) }));
+  const auSeries = (t.googleTrendsSeries || []).filter((r) => r.country === 'AU').map((r) => ({ date: r.series_date, value: Number(r.interest_index) }));
+
+  document.getElementById('content').innerHTML = `
+    <div style="margin-bottom:10px;"><a href="/explorer.html">← Back to Explorer</a></div>
+    <div class="section-head">
+      <div>
+        <h1>${esc(t.name)}</h1>
+        <p class="subtitle">${esc(t.definition || '')}</p>
+      </div>
+      <div>${stageBadge(t.lifecycleStage)}</div>
+    </div>
+    <div class="meta-row" style="margin-bottom:14px;">
+      ${fitBadge(t.brandFit)} ${auBadge(t.marketAuState)} ${durabilityBadge(t.durabilityLabel)}
+      <span>First detected ${fmtDate(t.firstDetectedDate)}</span> · <span>Age ${t.trendAgeDays}d</span> ·
+      <span>Active ${t.activeDays}d</span> · <span>${t.consecutiveActiveDays}d consecutive</span> ·
+      <span>${t.daysSincePeak}d since peak</span> · <span>${t.sourceAgreementCount} source(s) agree</span>
+    </div>
+    ${scoreLine(t)}
+    ${t.recommendedActionLabel ? `<p class="action" style="font-size:15px;">Recommended action: ${esc(t.recommendedActionLabel)}</p>` : ''}
+    <div class="meta-row">
+      <button class="secondary" onclick="submitFeedback(${t.id}, true)">👍 Relevant</button>
+      <button class="secondary" onclick="submitFeedback(${t.id}, false)">👎 Not relevant</button>
+    </div>
+
+    <h2>Trend over time</h2>
+    <div class="chart-wrap">
+      <div style="display:flex;justify-content:space-between;color:var(--muted);font-size:12px;"><span>Social score (line)</span><span>${scoreSeries.length} day(s) of history</span></div>
+      ${sparklineSvg(scoreSeries, { color: '#c22557' })}
+      <div style="display:flex;justify-content:space-between;color:var(--muted);font-size:12px;margin-top:10px;"><span>Buying score (line)</span></div>
+      ${sparklineSvg(buyingSeries, { color: '#0b6ea8' })}
+      ${auSeries.length ? `<div style="display:flex;justify-content:space-between;color:var(--muted);font-size:12px;margin-top:10px;"><span>Google Trends -- Australia (indexed 0-100, independent axis)</span></div>${sparklineSvg(auSeries, { color: '#a9660b' })}` : ''}
+    </div>
+
+    <h2>Platform breakdown</h2>
+    <div class="card-grid">
+      ${(t.platforms || []).map((p) => `<div class="card">
+        <h3>${esc(p.platform)}</h3>
+        <div class="kv-grid">
+          <div class="k">Posts</div><div>${p.cumulative_posts}</div>
+          ${p.platform !== 'reddit' ? `<div class="k">Plays</div><div>${fmtNum(p.plays_sum)} (${p.plays_new > 0 ? '+' + fmtNum(p.plays_new) + ' today' : 'flat today'})</div>` : ''}
+          <div class="k">Likes/score</div><div>${fmtNum(p.likes_sum)}</div>
+          <div class="k">Comments</div><div>${fmtNum(p.comments_sum)}</div>
+          <div class="k">Unique creators</div><div>${p.unique_creators}</div>
+          <div class="k">Creator concentration</div><div>${p.top_creator_share != null ? Math.round(p.top_creator_share * 100) + '%' : '—'}</div>
+        </div>
+      </div>`).join('') || '<div class="empty">No platform evidence yet.</div>'}
+    </div>
+
+    <h2>What people are saying</h2>
+    <div class="card">
+      <p><b>Themes:</b> ${(conv.conversationThemes || []).map(esc).join('; ') || '—'}</p>
+      <p><b>Questions:</b> ${(conv.questions || []).map(esc).join('; ') || '—'}</p>
+      <p><b>Purchase signals:</b> ${(conv.purchaseSignals || []).map(esc).join('; ') || '—'}</p>
+      <p><b>Barriers/objections:</b> ${(conv.barriers || []).map(esc).join('; ') || '—'}</p>
+    </div>
+
+    <h2>Top evidence</h2>
+    <div class="card">${(t.evidence || []).map(evidenceItem).join('') || '<div class="empty">No evidence yet.</div>'}</div>
+
+    <h2>Sportsgirl actions</h2>
+    <div class="card-grid">${(t.recommendations || []).map(recCard).join('') || '<div class="empty">No recommendations generated yet.</div>'}</div>
+
+    ${(t.productMatches || []).length ? `<h2>Product matches</h2>
+    <div class="card"><table><thead><tr><th>Product</th><th>Match type</th><th>Reason</th></tr></thead><tbody>
+      ${t.productMatches.map((m) => `<tr><td>${esc(m.name)} (${esc(m.sku)})</td><td>${esc(m.match_type)}</td><td>${esc(m.match_reason || '')}</td></tr>`).join('')}
+    </tbody></table></div>` : ''}
+
+    <h2>Why this score?</h2>
+    <div class="card-grid">
+      <div class="card"><h3>Social Opportunity — ${t.socialScore}</h3>${whyList(t.scoreComponents.social)}</div>
+      <div class="card"><h3>Buying Opportunity — ${t.buyingScore}</h3>${whyList(t.scoreComponents.buying)}</div>
+      <div class="card"><h3>Confidence — ${t.confidenceScore}</h3>${whyList(t.scoreComponents.confidence)}</div>
+    </div>
+
+    ${(t.aliases || []).length ? `<p class="subtitle">Aliases: ${t.aliases.map((a) => esc(a.alias_text)).join(', ')}</p>` : ''}
+  `;
+}
+
+(async function () {
+  await initPage(null);
+  const id = new URLSearchParams(window.location.search).get('id');
+  if (!id) { document.getElementById('content').innerHTML = '<div class="empty">No trend id given.</div>'; return; }
+  try {
+    await render(id);
+  } catch (err) {
+    document.getElementById('content').innerHTML = `<div class="empty">Trend not found.</div>`;
+  }
+})();
+</script>
+</body>
+</html>

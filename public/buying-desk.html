@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Buying Desk — Sportsgirl Beauty Radar</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+<div class="wrap">
+  <div class="section-head">
+    <div><h1>Buying Desk</h1><p class="subtitle">Commercial, product-led view of trend evidence.</p></div>
+    <a class="btn secondary" href="/api/export/buying-shortlist.csv">Export shortlist CSV</a>
+  </div>
+
+  <div class="filters">
+    <select id="fCategory"><option value="">All categories</option><option value="beauty_tools_accessories">Beauty Tools &amp; Accessories</option><option value="cosmetics">Cosmetics</option><option value="beauty_gift_packs">Beauty Gift Packs</option></select>
+    <select id="fStatus"><option value="">All statuses</option><option value="watch">Watch</option><option value="investigate">Investigate</option><option value="supplier_brief">Supplier brief requested</option><option value="sample">Sample in progress</option><option value="approved">Approved for range</option><option value="passed">Passed</option><option value="stocked">Already stocked</option></select>
+  </div>
+
+  <table>
+    <thead><tr>
+      <th>Rank</th><th>Trend / opportunity</th><th>Category</th><th>Buying score</th><th>Confidence</th>
+      <th>First detected</th><th>Consecutive days</th><th>AU validation</th><th>Lead-time risk</th><th>Status</th><th>Owner</th>
+    </tr></thead>
+    <tbody id="rows"><tr><td colspan="11" class="loading">Loading…</td></tr></tbody>
+  </table>
+</div>
+
+<script src="/js/app.js"></script>
+<script>
+let ALL = [];
+
+function row(r, i) {
+  const p = r.payload;
+  return `<tr>
+    <td>${i + 1}</td>
+    <td><a href="/trend.html?id=${r.trend_id}"><b>${esc(p.productOpportunity)}</b></a><br/><span style="color:var(--muted)">${esc(r.trend_name)} — ${esc(p.attributes || '')}</span></td>
+    <td>${esc((r.parent_category || '').replace(/_/g, ' '))}</td>
+    <td>${r.buying_score ?? '—'}</td>
+    <td>${r.confidence_score ?? '—'}</td>
+    <td>${fmtDate(r.first_detected_date)}</td>
+    <td>${r.consecutive_active_days ?? '—'}</td>
+    <td>${auBadge(r.market_au_state)}</td>
+    <td>${esc(p.leadTimeRisk || '—')}</td>
+    <td><select data-field="status" data-id="${r.id}">
+      ${['watch', 'investigate', 'supplier_brief', 'sample', 'approved', 'passed', 'stocked'].map((s) => `<option value="${s}" ${r.status === s ? 'selected' : ''}>${s.replace(/_/g, ' ')}</option>`).join('')}
+    </select></td>
+    <td><input data-field="owner" data-id="${r.id}" value="${esc(r.owner || '')}" style="width:100px;padding:5px;border:1px solid var(--border);border-radius:6px;" /></td>
+  </tr>`;
+}
+
+function render() {
+  const cat = document.getElementById('fCategory').value;
+  const status = document.getElementById('fStatus').value;
+  const filtered = ALL.filter((r) => (!cat || r.parent_category === cat) && (!status || r.status === status));
+  document.getElementById('rows').innerHTML = filtered.length
+    ? filtered.map(row).join('')
+    : '<tr><td colspan="11" class="empty">No buying opportunities match these filters.</td></tr>';
+  document.querySelectorAll('[data-field]').forEach((el) => {
+    el.addEventListener('change', async (e) => {
+      const id = e.target.dataset.id, field = e.target.dataset.field;
+      await api(`/api/recommendations/${id}`, { method: 'PATCH', body: { [field]: e.target.value } });
+    });
+  });
+}
+
+(async function () {
+  await initPage('/buying-desk.html');
+  ALL = await api('/api/recommendations?type=buying_opportunity');
+  render();
+  ['fCategory', 'fStatus'].forEach((id) => document.getElementById(id).addEventListener('change', render));
+})();
+</script>
+</body>
+</html>

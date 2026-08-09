@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Admin — Sportsgirl Beauty Radar</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+<div class="wrap">
+  <div class="section-head">
+    <div><h1>Admin / Tracking Settings</h1><p class="subtitle">Taxonomy, thresholds, sources and governance.</p></div>
+    <button id="rerun">Run collection now</button>
+  </div>
+
+  <div class="tabs">
+    <button data-tab="taxonomy" class="active">Taxonomy</button>
+    <button data-tab="queries">Discovery queries</button>
+    <button data-tab="config">Score weights &amp; thresholds</button>
+    <button data-tab="products">Product catalogue</button>
+    <button data-tab="audit">Audit log</button>
+  </div>
+
+  <div id="panel-taxonomy" class="panel">
+    <div class="filters">
+      <select id="taxCategory"><option value="beauty_tools_accessories">Beauty Tools &amp; Accessories</option><option value="cosmetics">Cosmetics</option><option value="beauty_gift_packs">Beauty Gift Packs</option><option value="all">All (exclusions/negatives)</option></select>
+      <select id="taxType"><option value="include">Include</option><option value="exclude">Exclude</option><option value="negative_keyword">Negative keyword</option></select>
+      <input id="taxTerm" placeholder="term…" />
+      <button id="taxAdd" class="secondary">Add</button>
+    </div>
+    <table><thead><tr><th>Category</th><th>Term</th><th>Type</th><th>Active</th><th></th></tr></thead><tbody id="taxRows"></tbody></table>
+  </div>
+
+  <div id="panel-queries" class="panel" style="display:none;">
+    <table><thead><tr><th>Platform</th><th>Type</th><th>Query</th><th>Status</th><th>Source</th><th>Active</th></tr></thead><tbody id="queryRows"></tbody></table>
+  </div>
+
+  <div id="panel-config" class="panel" style="display:none;">
+    <div id="configRows"></div>
+  </div>
+
+  <div id="panel-products" class="panel" style="display:none;">
+    <div class="filters">
+      <input id="pSku" placeholder="SKU" style="width:120px;" /><input id="pName" placeholder="Name" style="width:200px;" />
+      <input id="pCategory" placeholder="Category" style="width:140px;" /><input id="pPrice" placeholder="Price" style="width:80px;" />
+      <button id="pAdd" class="secondary">Add / update product</button>
+    </div>
+    <table><thead><tr><th>SKU</th><th>Name</th><th>Category</th><th>Price</th><th>Stock</th></tr></thead><tbody id="productRows"></tbody></table>
+  </div>
+
+  <div id="panel-audit" class="panel" style="display:none;">
+    <table><thead><tr><th>When</th><th>User</th><th>Action</th><th>Entity</th><th>Reason</th></tr></thead><tbody id="auditRows"></tbody></table>
+  </div>
+</div>
+
+<script src="/js/app.js"></script>
+<script>
+function switchTab(tab) {
+  document.querySelectorAll('.tabs button').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
+  document.querySelectorAll('.panel').forEach((p) => p.style.display = p.id === `panel-${tab}` ? 'block' : 'none');
+}
+
+async function loadTaxonomy() {
+  const rows = await api('/api/admin/taxonomy');
+  document.getElementById('taxRows').innerHTML = rows.map((r) => `<tr>
+    <td>${esc(r.parent_category)}</td><td>${esc(r.term)}</td><td>${esc(r.term_type)}</td>
+    <td><input type="checkbox" ${r.active ? 'checked' : ''} onchange="toggleTax(${r.id}, this.checked)" /></td>
+    <td><button class="secondary" onclick="deleteTax(${r.id})">Delete</button></td>
+  </tr>`).join('');
+}
+async function toggleTax(id, active) { await api(`/api/admin/taxonomy/${id}`, { method: 'PATCH', body: { active } }); }
+async function deleteTax(id) { await api(`/api/admin/taxonomy/${id}`, { method: 'DELETE' }); loadTaxonomy(); }
+
+async function loadQueries() {
+  const rows = await api('/api/admin/discovery-queries');
+  document.getElementById('queryRows').innerHTML = rows.map((r) => `<tr>
+    <td>${esc(r.platform)}</td><td>${esc(r.query_type)}</td><td>${esc(r.query_text)}</td>
+    <td>${esc(r.status)} ${r.status === 'pending_review' ? `<button class="secondary" onclick="approveQuery(${r.id})">Approve</button>` : ''}</td>
+    <td>${esc(r.source)}</td>
+    <td><input type="checkbox" ${r.active ? 'checked' : ''} onchange="toggleQuery(${r.id}, this.checked)" /></td>
+  </tr>`).join('');
+}
+async function toggleQuery(id, active) { await api(`/api/admin/discovery-queries/${id}`, { method: 'PATCH', body: { active } }); }
+async function approveQuery(id) { await api(`/api/admin/discovery-queries/${id}`, { method: 'PATCH', body: { status: 'approved' } }); loadQueries(); }
+
+async function loadConfig() {
+  const rows = await api('/api/admin/config');
+  document.getElementById('configRows').innerHTML = rows.map((r) => `<div class="card">
+    <h3>${esc(r.key)}</h3>
+    <textarea rows="6" id="cfg-${esc(r.key)}">${esc(JSON.stringify(r.value, null, 2))}</textarea>
+    <div style="margin-top:8px;"><button class="secondary" onclick="saveConfig('${r.key}')">Save</button></div>
+  </div>`).join('');
+}
+async function saveConfig(key) {
+  const el = document.getElementById(`cfg-${key}`);
+  try {
+    const value = JSON.parse(el.value);
+    await api(`/api/admin/config/${key}`, { method: 'PUT', body: { value } });
+    alert('Saved.');
+  } catch (err) {
+    alert('Invalid JSON: ' + err.message);
+  }
+}
+
+async function loadProducts() {
+  const rows = await api('/api/admin/products');
+  document.getElementById('productRows').innerHTML = rows.map((r) => `<tr><td>${esc(r.sku)}</td><td>${esc(r.name)}</td><td>${esc(r.category || '')}</td><td>${r.price ?? ''}</td><td>${esc(r.stock_status || '')}</td></tr>`).join('');
+}
+
+async function loadAudit() {
+  const rows = await api('/api/admin/audit-log');
+  document.getElementById('auditRows').innerHTML = rows.map((r) => `<tr><td>${fmtDate(r.created_at)}</td><td>${esc(r.user_email || '')}</td><td>${esc(r.action)}</td><td>${esc(r.entity_type || '')} ${r.entity_id ?? ''}</td><td>${esc(r.reason || '')}</td></tr>`).join('');
+}
+
+(async function () {
+  const user = await initPage('/admin.html');
+  if (user.role !== 'admin') {
+    document.querySelector('.wrap').innerHTML = '<div class="empty">Admin access only.</div>';
+    return;
+  }
+
+  document.querySelectorAll('.tabs button').forEach((b) => b.addEventListener('click', () => switchTab(b.dataset.tab)));
+
+  document.getElementById('taxAdd').addEventListener('click', async () => {
+    const term = document.getElementById('taxTerm').value.trim();
+    if (!term) return;
+    await api('/api/admin/taxonomy', { method: 'POST', body: { parentCategory: document.getElementById('taxCategory').value, term, termType: document.getElementById('taxType').value } });
+    document.getElementById('taxTerm').value = '';
+    loadTaxonomy();
+  });
+
+  document.getElementById('pAdd').addEventListener('click', async () => {
+    const sku = document.getElementById('pSku').value.trim(), name = document.getElementById('pName').value.trim();
+    if (!sku || !name) return alert('SKU and name required.');
+    await api('/api/admin/products', { method: 'POST', body: { sku, name, category: document.getElementById('pCategory').value, price: Number(document.getElementById('pPrice').value) || null } });
+    loadProducts();
+  });
+
+  document.getElementById('rerun').addEventListener('click', async () => {
+    await api('/api/admin/rerun', { method: 'POST' });
+    alert('Manual collection run started -- this can take a few minutes.');
+  });
+
+  await Promise.all([loadTaxonomy(), loadQueries(), loadConfig(), loadProducts(), loadAudit()]);
+})();
+</script>
+</body>
+</html>

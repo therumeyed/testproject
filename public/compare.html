@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Compare — Sportsgirl Beauty Radar</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+<div class="wrap">
+  <h1>Compare trends</h1>
+  <p class="subtitle">Pick 2-5 trends to compare side by side. Platform metrics are kept separate -- never summed into one misleading total.</p>
+
+  <div class="filters">
+    <select id="picker" class="wide"></select>
+    <button id="add" class="secondary">Add to comparison</button>
+  </div>
+
+  <div id="table"></div>
+</div>
+
+<script src="/js/app.js"></script>
+<script>
+let all = [];
+let selected = [];
+
+function render() {
+  if (selected.length === 0) { document.getElementById('table').innerHTML = '<div class="empty">Add at least 2 trends to compare.</div>'; return; }
+  const rowsDef = [
+    ['Trend age', (t) => t.trendAgeDays + 'd'],
+    ['Lifecycle stage', (t) => STAGE_LABELS[t.lifecycleStage] || t.lifecycleStage],
+    ['Durability', (t) => DURABILITY_LABELS[t.durabilityLabel] || t.durabilityLabel],
+    ['Consecutive active days', (t) => t.consecutiveActiveDays],
+    ['Days since peak', (t) => t.daysSincePeak],
+    ['TikTok plays', (t) => fmtNum((t.platforms || []).find((p) => p.platform === 'tiktok')?.plays_sum)],
+    ['TikTok new plays (latest day)', (t) => fmtNum((t.platforms || []).find((p) => p.platform === 'tiktok')?.plays_new)],
+    ['Instagram plays', (t) => fmtNum((t.platforms || []).find((p) => p.platform === 'instagram')?.plays_sum)],
+    ['Reddit posts/comments', (t) => { const r = (t.platforms || []).find((p) => p.platform === 'reddit'); return r ? `${r.cumulative_posts} / ${fmtNum(r.comments_sum)}` : '—'; }],
+    ['Google Trends (AU)', (t) => t.googleTrends?.hasData ? (t.googleTrends.auDirection === 'up' ? '↑ rising' : t.googleTrends.auDirection === 'down' ? '↓ falling' : '→ flat') : '—'],
+    ['Australian confirmation', (t) => AU_LABELS[t.marketAuState] || t.marketAuState],
+    ['Social score', (t) => t.socialScore],
+    ['Buying score', (t) => t.buyingScore],
+    ['Confidence', (t) => t.confidenceScore]
+  ];
+  let html = '<table><thead><tr><th></th>' + selected.map((t) => `<th><a href="/trend.html?id=${t.id}">${esc(t.name)}</a> <button class="secondary" style="padding:2px 6px;" onclick="removeTrend(${t.id})">✕</button></th>`).join('') + '</tr></thead><tbody>';
+  for (const [label, fn] of rowsDef) {
+    html += `<tr><td><b>${label}</b></td>${selected.map((t) => `<td>${fn(t) ?? '—'}</td>`).join('')}</tr>`;
+  }
+  html += '</tbody></table>';
+  document.getElementById('table').innerHTML = html;
+}
+
+function removeTrend(id) {
+  selected = selected.filter((t) => t.id !== id);
+  render();
+}
+
+(async function () {
+  await initPage('/compare.html');
+  all = await api('/api/trends');
+  const picker = document.getElementById('picker');
+  picker.innerHTML = all.map((t) => `<option value="${t.id}">${esc(t.name)}</option>`).join('');
+
+  document.getElementById('add').addEventListener('click', () => {
+    if (selected.length >= 5) return alert('Maximum 5 trends.');
+    const id = Number(picker.value);
+    if (selected.find((t) => t.id === id)) return;
+    const t = all.find((x) => x.id === id);
+    if (t) selected.push(t);
+    render();
+  });
+
+  const params = new URLSearchParams(window.location.search).get('ids');
+  if (params) {
+    const ids = params.split(',').map(Number);
+    selected = all.filter((t) => ids.includes(t.id));
+  }
+  render();
+})();
+</script>
+</body>
+</html>
