@@ -135,3 +135,20 @@ button:disabled { opacity: 0.5; cursor: default; }
 
 textarea, select.wide { width: 100%; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; }
 .chart-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; margin-bottom: 16px; }
+
+.run-progress { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; margin-bottom: 20px; }
+.run-progress .stage-row { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+.run-progress .stage-name { font-weight: 700; font-size: 14px; }
+.run-progress .stage-count { font-size: 12.5px; color: var(--muted); }
+.run-progress .bar-track { height: 8px; border-radius: 999px; background: var(--bg); border: 1px solid var(--border); overflow: hidden; margin-bottom: 6px; }
+.run-progress .bar-fill { height: 100%; background: var(--accent); transition: width 0.3s ease; }
+.run-progress .steps { display: flex; gap: 4px; margin-bottom: 10px; }
+.run-progress .steps span { flex: 1; height: 4px; border-radius: 999px; background: var(--bg); border: 1px solid var(--border); }
+.run-progress .steps span.done { background: var(--good); border-color: var(--good); }
+.run-progress .steps span.active { background: var(--accent); border-color: var(--accent); }
+.run-progress .detail { font-size: 12.5px; color: var(--muted); margin-bottom: 10px; }
+.run-progress .log { max-height: 160px; overflow-y: auto; font-size: 12px; font-family: ui-monospace, monospace; background: var(--bg); border-radius: 6px; padding: 8px 10px; color: var(--muted); }
+.run-progress .log div { padding: 2px 0; }
+.run-progress .status-line { font-size: 13px; font-weight: 600; }
+.run-progress .status-line.ok { color: var(--good); }
+.run-progress .status-line.err { color: var(--bad); }

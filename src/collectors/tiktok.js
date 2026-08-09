@@ -1,5 +1,6 @@
 const { runActor } = require('../lib/apifyClient');
 const repo = require('../lib/repo');
+const runStatus = require('../lib/runStatus');
 
 // Overridable if this actor gets renamed/deprecated -- see README "Phase 0".
 // Field mapping below follows clockworks/tiktok-scraper's documented output
@@ -57,12 +58,14 @@ async function collect() {
 
   const runId = await repo.startSourceRun('tiktok');
   const queries = await repo.getActiveQueries('tiktok');
+  runStatus.setStage('tiktok', queries.length);
   let fetched = 0;
   let newCount = 0;
   const today = new Date().toISOString().slice(0, 10);
 
   try {
     for (const q of queries) {
+      runStatus.tick(q.query_text);
       let items;
       try {
         items = await runActor(ACTOR_ID, {
@@ -73,6 +76,7 @@ async function collect() {
         });
       } catch (err) {
         console.error(`[tiktok] query "${q.query_text}" failed:`, err.message);
+        runStatus.pushLog(`tiktok "${q.query_text}" failed: ${err.message}`);
         continue;
       }
 
@@ -103,6 +107,7 @@ async function collect() {
     }
 
     await repo.finishSourceRun(runId, { status: 'success', itemsFetched: fetched, itemsNew: newCount });
+    runStatus.pushLog(`TikTok done: ${fetched} fetched, ${newCount} new`);
   } catch (err) {
     await repo.finishSourceRun(runId, { status: 'error', itemsFetched: fetched, itemsNew: newCount, errorMessage: err.message });
     throw err;

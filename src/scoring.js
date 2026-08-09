@@ -4,6 +4,7 @@
 // language interpretation only.
 const { pool } = require('./db');
 const { getConfig } = require('./config/seedConfig');
+const runStatus = require('./lib/runStatus');
 
 const FORMULA_VERSION = '1.0.0';
 const PLATFORMS = ['tiktok', 'instagram', 'reddit'];
@@ -450,9 +451,11 @@ async function computeAndStoreScores(dateStr) {
   const weights = { ...weightsCfg, buyingLeadTimeDays: leadTime, minEvidence };
 
   const { rows: trends } = await pool.query(`SELECT * FROM trend_topics WHERE status != 'merged'`);
+  runStatus.setStage('scoring', trends.length);
   let scored = 0;
 
   for (const trend of trends) {
+    runStatus.tick(trend.name);
     const ageInfo = await computeAgeAndLifecycle(trend, dateStr, thresholds);
     const scores = await computeScoresForTrend(trend, ageInfo, weights);
     const recommendedAction = deriveRecommendedAction(trend, ageInfo, scores);
@@ -483,6 +486,7 @@ async function computeAndStoreScores(dateStr) {
     scored++;
   }
 
+  runStatus.pushLog(`Scoring done: ${scored} trend(s) scored`);
   return scored;
 }
 

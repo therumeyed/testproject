@@ -1,6 +1,7 @@
 const { pool } = require('./db');
 const { callClaudeJson, isConfigured } = require('./lib/claude');
 const { getNegativeAndExcludeTerms } = require('./lib/repo');
+const runStatus = require('./lib/runStatus');
 
 const BATCH_SIZE = 25;
 const PARENT_CATEGORIES = ['beauty_tools_accessories', 'cosmetics', 'beauty_gift_packs'];
@@ -200,6 +201,12 @@ async function runClustering() {
     return { clustered: 0, skipped: true };
   }
 
+  const { rows: countRows } = await pool.query(
+    `SELECT count(*)::int AS n FROM social_posts sp
+     WHERE sp.is_relevant IS NULL AND NOT EXISTS (SELECT 1 FROM trend_post_matches tpm WHERE tpm.post_id = sp.id)`
+  );
+  runStatus.setStage('clustering', countRows[0]?.n || 0);
+
   let totalClustered = 0;
   let batch = await fetchUnclusteredPosts(BATCH_SIZE);
 
@@ -218,13 +225,16 @@ async function runClustering() {
       });
     } catch (err) {
       console.error('[cluster] batch failed after retries:', err.message);
+      runStatus.pushLog(`Clustering batch failed: ${err.message}`);
       break; // leave this batch unclustered for the next run rather than looping forever
     }
 
     for (const cluster of response.clusters) {
       await upsertCluster(cluster);
       totalClustered += cluster.evidencePostIds.length;
+      runStatus.pushLog(`Clustered "${cluster.canonicalTrendName}" (${cluster.evidencePostIds.length} post(s))`);
     }
+    runStatus.tick(`processed ${batch.length} post(s)`, batch.length);
 
     const clusteredIds = new Set(response.clusters.flatMap((c) => c.evidencePostIds));
     const leftoverIds = batch.map((p) => p.id).filter((id) => !clusteredIds.has(id));
@@ -236,6 +246,7 @@ async function runClustering() {
   }
 
   console.log(`[cluster] clustered ${totalClustered} posts into trends`);
+  runStatus.pushLog(`Clustering done: ${totalClustered} post(s) clustered`);
   return { clustered: totalClustered, skipped: false };
 }
 

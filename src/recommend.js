@@ -1,5 +1,6 @@
 const { pool } = require('./db');
 const { callClaudeJson, isConfigured } = require('./lib/claude');
+const runStatus = require('./lib/runStatus');
 
 // Generates the two client-facing, evidence-grounded outputs: a Sportsgirl
 // social content idea (section 9.3) and a buying recommendation (section
@@ -167,16 +168,20 @@ async function runRecommendations() {
      WHERE t.status = 'active'`
   );
 
+  runStatus.setStage('recommendations', trends.length);
   let generated = 0;
   for (const trend of trends) {
+    runStatus.tick(trend.name);
     try {
       const result = await generateForTrend(trend, trend);
       if (result.generated) generated++;
     } catch (err) {
       console.error(`[recommend] trend ${trend.id} ("${trend.name}") failed:`, err.message);
+      runStatus.pushLog(`Recommendation for "${trend.name}" failed: ${err.message}`);
     }
   }
   console.log(`[recommend] generated recommendations for ${generated} trend(s)`);
+  runStatus.pushLog(`Recommendations done: generated for ${generated} trend(s)`);
   return { generated, skipped: false };
 }
 

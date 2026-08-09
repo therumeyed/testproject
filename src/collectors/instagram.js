@@ -1,5 +1,6 @@
 const { runActor } = require('../lib/apifyClient');
 const repo = require('../lib/repo');
+const runStatus = require('../lib/runStatus');
 
 // Field mapping follows apify/instagram-scraper's documented output shape;
 // RECONFIRM against a live sample run before production (README "Phase 0").
@@ -58,12 +59,14 @@ async function collect() {
 
   const runId = await repo.startSourceRun('instagram');
   const queries = await repo.getActiveQueries('instagram');
+  runStatus.setStage('instagram', queries.length);
   let fetched = 0;
   let newCount = 0;
   const today = new Date().toISOString().slice(0, 10);
 
   try {
     for (const q of queries) {
+      runStatus.tick(q.query_text);
       let items;
       try {
         // Instagram has no free-text post search -- hashtag search is the
@@ -77,6 +80,7 @@ async function collect() {
         });
       } catch (err) {
         console.error(`[instagram] query "${q.query_text}" failed:`, err.message);
+        runStatus.pushLog(`instagram "${q.query_text}" failed: ${err.message}`);
         continue;
       }
 
@@ -106,6 +110,7 @@ async function collect() {
     }
 
     await repo.finishSourceRun(runId, { status: 'success', itemsFetched: fetched, itemsNew: newCount });
+    runStatus.pushLog(`Instagram done: ${fetched} fetched, ${newCount} new`);
   } catch (err) {
     await repo.finishSourceRun(runId, { status: 'error', itemsFetched: fetched, itemsNew: newCount, errorMessage: err.message });
     throw err;

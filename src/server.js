@@ -6,6 +6,7 @@ const { seedConfig, getConfig, getAllConfig, setConfig } = require('./config/see
 const { listTrends, getTrendDetail, ACTION_LABELS } = require('./lib/trendQueries');
 const { attachIdentity } = require('./lib/auth');
 const { toCsv } = require('./lib/csv');
+const runStatus = require('./lib/runStatus');
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
@@ -348,8 +349,15 @@ admin.post('/products/:trendId/match', async (req, res) => {
   res.json(rows[0]);
 });
 
+admin.get('/rerun-status', (req, res) => res.json(runStatus.getStatus()));
+
 admin.post('/rerun', async (req, res) => {
-  res.json({ ok: true, message: 'Manual rerun started -- check Source Health shortly.' });
+  if (runStatus.getStatus().running) {
+    return res.status(409).json({ error: 'already_running', message: 'A collection run is already in progress.' });
+  }
+
+  res.json({ ok: true, message: 'Manual rerun started.' });
+  runStatus.startRun();
   await writeAudit(req, 'manual_rerun_triggered', 'ingest', null, null, null);
   try {
     const tiktok = require('./collectors/tiktok');
@@ -370,8 +378,10 @@ admin.post('/rerun', async (req, res) => {
     await computeAndStoreScores(today);
     await runRecommendations().catch((e) => console.error('[rerun] recommendations failed:', e.message));
     console.log('[rerun] manual ingest run complete');
+    runStatus.finishRun();
   } catch (err) {
     console.error('[rerun] failed:', err.message);
+    runStatus.finishRun(err);
   }
 });
 

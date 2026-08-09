@@ -13,6 +13,18 @@
     <button id="rerun">Run collection now</button>
   </div>
 
+  <div id="runProgress" class="run-progress" style="display:none;">
+    <div class="stage-row">
+      <span class="stage-name" id="rpStageName">—</span>
+      <span class="stage-count" id="rpStageCount"></span>
+    </div>
+    <div class="bar-track"><div class="bar-fill" id="rpBar" style="width:0%;"></div></div>
+    <div class="steps" id="rpSteps"></div>
+    <div class="detail" id="rpDetail"></div>
+    <div class="status-line" id="rpStatus"></div>
+    <div class="log" id="rpLog"></div>
+  </div>
+
   <div class="tabs">
     <button data-tab="taxonomy" class="active">Taxonomy</button>
     <button data-tab="queries">Discovery queries</button>
@@ -112,6 +124,75 @@ async function loadAudit() {
   document.getElementById('auditRows').innerHTML = rows.map((r) => `<tr><td>${fmtDate(r.created_at)}</td><td>${esc(r.user_email || '')}</td><td>${esc(r.action)}</td><td>${esc(r.entity_type || '')} ${r.entity_id ?? ''}</td><td>${esc(r.reason || '')}</td></tr>`).join('');
 }
 
+// Mirrors src/lib/runStatus.js STAGES -- display labels only.
+const RUN_STAGES = [
+  { key: 'tiktok', label: 'TikTok' },
+  { key: 'instagram', label: 'Instagram' },
+  { key: 'reddit', label: 'Reddit' },
+  { key: 'clustering', label: 'Clustering' },
+  { key: 'google_trends', label: 'Google Trends' },
+  { key: 'scoring', label: 'Scoring' },
+  { key: 'recommendations', label: 'Recommendations' }
+];
+
+let pollTimer = null;
+
+function renderRunStatus(s) {
+  const panel = document.getElementById('runProgress');
+  // Nothing to show yet -- no run has ever been triggered this process.
+  if (!s.running && !s.finishedAt && s.log.length === 0) {
+    panel.style.display = 'none';
+    return;
+  }
+  panel.style.display = 'block';
+
+  document.getElementById('rpStageName').textContent = s.running
+    ? (s.stageLabel || 'Starting…')
+    : (s.error ? 'Run failed' : 'Last run finished');
+  document.getElementById('rpStageCount').textContent = s.total ? `${s.current} / ${s.total}` : '';
+
+  const pct = s.total ? Math.min(100, Math.round((s.current / s.total) * 100)) : (s.running ? 5 : 100);
+  document.getElementById('rpBar').style.width = pct + '%';
+
+  document.getElementById('rpSteps').innerHTML = RUN_STAGES.map((stage, i) => {
+    const cls = i < s.stageIndex ? 'done' : i === s.stageIndex ? 'active' : '';
+    return `<span class="${cls}" title="${esc(stage.label)}"></span>`;
+  }).join('');
+
+  document.getElementById('rpDetail').textContent = s.detail || '';
+
+  const statusEl = document.getElementById('rpStatus');
+  if (s.running) {
+    statusEl.textContent = '';
+    statusEl.className = 'status-line';
+  } else if (s.error) {
+    statusEl.textContent = `Failed: ${s.error}`;
+    statusEl.className = 'status-line err';
+  } else if (s.finishedAt) {
+    statusEl.textContent = `Completed at ${new Date(s.finishedAt).toLocaleTimeString('en-AU')}`;
+    statusEl.className = 'status-line ok';
+  } else {
+    statusEl.textContent = '';
+  }
+
+  document.getElementById('rpLog').innerHTML = s.log.map((l) => `<div>${new Date(l.t).toLocaleTimeString('en-AU')} — ${esc(l.line)}</div>`).join('');
+
+  document.getElementById('rerun').disabled = s.running;
+  document.getElementById('rerun').textContent = s.running ? 'Run in progress…' : 'Run collection now';
+}
+
+async function pollRunStatus() {
+  let s;
+  try {
+    s = await api('/api/admin/rerun-status');
+  } catch {
+    return; // e.g. still starting up -- try again next tick
+  }
+  renderRunStatus(s);
+  clearTimeout(pollTimer);
+  if (s.running) pollTimer = setTimeout(pollRunStatus, 2000);
+}
+
 (async function () {
   const user = await initPage('/admin.html');
   if (user.role !== 'admin') {
@@ -137,9 +218,17 @@ async function loadAudit() {
   });
 
   document.getElementById('rerun').addEventListener('click', async () => {
-    await api('/api/admin/rerun', { method: 'POST' });
-    alert('Manual collection run started -- this can take a few minutes.');
+    try {
+      await api('/api/admin/rerun', { method: 'POST' });
+    } catch (err) {
+      if (!String(err.message).includes('already_running')) throw err;
+    }
+    pollRunStatus();
   });
+
+  // Resume showing progress if a run was already in flight when this page loaded
+  // (e.g. someone clicked "Run collection now" and then reloaded).
+  pollRunStatus();
 
   await Promise.all([loadTaxonomy(), loadQueries(), loadConfig(), loadProducts(), loadAudit()]);
 })();

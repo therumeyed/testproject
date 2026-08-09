@@ -1,5 +1,6 @@
 const { pool } = require('../db');
 const repo = require('../lib/repo');
+const runStatus = require('../lib/runStatus');
 
 // Calls the same free, unauthenticated JSON endpoints trends.google.com
 // itself uses to render its charts -- no API key, no Apify actor, no cost.
@@ -118,17 +119,20 @@ async function collectOne(trend, geo) {
 async function collectForActiveTrends() {
   const runId = await repo.startSourceRun('google_trends');
   const { rows: trends } = await pool.query(`SELECT id, name FROM trend_topics WHERE status = 'active' ORDER BY id`);
+  runStatus.setStage('google_trends', trends.length);
 
   let fetched = 0;
   let failures = 0;
   try {
     for (const trend of trends) {
+      runStatus.tick(trend.name);
       for (const geo of ['', 'AU']) {
         try {
           fetched += await collectOne(trend, geo);
         } catch (err) {
           failures++;
           console.error(`[google_trends] "${trend.name}" (${geo || 'GLOBAL'}) failed:`, err.message);
+          runStatus.pushLog(`google_trends "${trend.name}" (${geo || 'GLOBAL'}) failed: ${err.message}`);
         }
         await sleep(800); // light pacing -- this is an unofficial endpoint, not a paid API with a documented rate limit
       }
@@ -139,6 +143,7 @@ async function collectForActiveTrends() {
       status, itemsFetched: fetched, itemsNew: fetched,
       errorMessage: failures > 0 ? `${failures} of ${trends.length * 2} trend/geo lookups failed -- see logs (likely 429s if this is new)` : null
     });
+    runStatus.pushLog(`Google Trends done: ${fetched} data point(s), ${failures} failure(s)`);
   } catch (err) {
     await repo.finishSourceRun(runId, { status: 'error', itemsFetched: fetched, errorMessage: err.message });
     throw err;

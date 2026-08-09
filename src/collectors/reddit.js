@@ -2,6 +2,7 @@ const { runActor } = require('../lib/apifyClient');
 const repo = require('../lib/repo');
 const { getConfig } = require('../config/seedConfig');
 const { containsQuestion, containsPurchaseIntent } = require('../lib/textSignals');
+const runStatus = require('../lib/runStatus');
 
 // Field mapping follows trudax/reddit-scraper-lite's output shape (already
 // verified working elsewhere in this account's Apify pipelines). RECONFIRM
@@ -53,6 +54,7 @@ async function collect() {
 
   const runId = await repo.startSourceRun('reddit');
   const queries = await repo.getActiveQueries('reddit');
+  runStatus.setStage('reddit', queries.length);
   const sampling = await getConfig('comment_sampling');
   let fetched = 0;
   let newCount = 0;
@@ -60,6 +62,7 @@ async function collect() {
 
   try {
     for (const q of queries) {
+      runStatus.tick(q.query_text);
       // Subreddit-monitoring queries get a deeper comment sample (fewer,
       // higher-value sources); keyword search queries get the shallow
       // sample to keep pay-per-result cost bounded (section 5.6).
@@ -79,6 +82,7 @@ async function collect() {
         });
       } catch (err) {
         console.error(`[reddit] query "${q.query_text}" failed:`, err.message);
+        runStatus.pushLog(`reddit "${q.query_text}" failed: ${err.message}`);
         continue;
       }
 
@@ -129,6 +133,7 @@ async function collect() {
     }
 
     await repo.finishSourceRun(runId, { status: 'success', itemsFetched: fetched, itemsNew: newCount });
+    runStatus.pushLog(`Reddit done: ${fetched} fetched, ${newCount} new`);
   } catch (err) {
     await repo.finishSourceRun(runId, { status: 'error', itemsFetched: fetched, itemsNew: newCount, errorMessage: err.message });
     throw err;
