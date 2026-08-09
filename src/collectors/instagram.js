@@ -6,6 +6,7 @@ const runStatus = require('../lib/runStatus');
 // RECONFIRM against a live sample run before production (README "Phase 0").
 const ACTOR_ID = process.env.APIFY_INSTAGRAM_ACTOR_ID || 'apify/instagram-scraper';
 const MAX_ITEMS = Number(process.env.APIFY_MAX_ITEMS_PER_QUERY) || 60;
+const MAX_QUERIES_PER_RUN = Number(process.env.APIFY_MAX_QUERIES_PER_RUN) || 20;
 
 function contentType(item) {
   const t = (item.type || item.productType || '').toLowerCase();
@@ -58,8 +59,10 @@ async function collect() {
   }
 
   const runId = await repo.startSourceRun('instagram');
-  const queries = await repo.getActiveQueries('instagram');
+  const queries = await repo.getActiveQueries('instagram', { maxResults: MAX_QUERIES_PER_RUN });
+  const alreadyDoneToday = await repo.countSkippableQueries('instagram');
   runStatus.setStage('instagram', queries.length);
+  if (alreadyDoneToday > 0) runStatus.pushLog(`Instagram: skipping ${alreadyDoneToday} quer(ies) already collected today`);
   let fetched = 0;
   let newCount = 0;
   const today = new Date().toISOString().slice(0, 10);
@@ -78,6 +81,7 @@ async function collect() {
           searchLimit: 1,
           resultsLimit: MAX_ITEMS
         });
+        await repo.markQuerySuccess(q.id);
       } catch (err) {
         console.error(`[instagram] query "${q.query_text}" failed:`, err.message);
         runStatus.pushLog(`instagram "${q.query_text}" failed: ${err.message}`);

@@ -15,13 +15,37 @@ async function finishSourceRun(id, { status, itemsFetched, itemsNew, errorMessag
   );
 }
 
-async function getActiveQueries(platform) {
+// Skips any query already successfully collected today (no point re-spending
+// Apify credit re-fetching the same keyword twice in one day), and caps how
+// many get attempted this run -- prioritising whichever haven't succeeded
+// most recently (NULLS FIRST puts queries that have never once succeeded at
+// the front), so repeated runs rotate through the full seed list over time
+// instead of always hammering the same handful and exhausting API tokens
+// trying to cover everything in a single run.
+async function getActiveQueries(platform, { maxResults } = {}) {
   const res = await pool.query(
-    `SELECT id, platform, query_type, query_text, category_hint FROM discovery_queries
-     WHERE platform = $1 AND active = true AND status = 'approved' ORDER BY id`,
-    [platform]
+    `SELECT id, platform, query_type, query_text, category_hint, last_success_at FROM discovery_queries
+     WHERE platform = $1 AND active = true AND status = 'approved'
+       AND (last_success_at IS NULL OR last_success_at::date < CURRENT_DATE)
+     ORDER BY last_success_at ASC NULLS FIRST, id
+     ${maxResults ? 'LIMIT $2' : ''}`,
+    maxResults ? [platform, maxResults] : [platform]
   );
   return res.rows;
+}
+
+async function countSkippableQueries(platform) {
+  const res = await pool.query(
+    `SELECT count(*)::int AS n FROM discovery_queries
+     WHERE platform = $1 AND active = true AND status = 'approved'
+       AND last_success_at IS NOT NULL AND last_success_at::date = CURRENT_DATE`,
+    [platform]
+  );
+  return res.rows[0].n;
+}
+
+async function markQuerySuccess(discoveryQueryId) {
+  await pool.query(`UPDATE discovery_queries SET last_success_at = now() WHERE id = $1`, [discoveryQueryId]);
 }
 
 async function getNegativeAndExcludeTerms() {
@@ -142,6 +166,7 @@ async function upsertComment(comment) {
 }
 
 module.exports = {
-  startSourceRun, finishSourceRun, getActiveQueries, getNegativeAndExcludeTerms, isExcludedText,
+  startSourceRun, finishSourceRun, getActiveQueries, countSkippableQueries, markQuerySuccess,
+  getNegativeAndExcludeTerms, isExcludedText,
   upsertCreator, upsertRawItem, upsertPost, upsertMetricSnapshot, recordQueryMatch, upsertComment
 };

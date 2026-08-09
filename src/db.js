@@ -42,10 +42,14 @@ async function initSchema() {
       active BOOLEAN NOT NULL DEFAULT true,
       discovered_from_trend_id INTEGER,
       approved_by TEXT,
+      last_success_at TIMESTAMPTZ,          -- last time this query returned results without error
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       UNIQUE(platform, query_type, query_text)
     );
+    -- Already-deployed databases won't have this column from the CREATE
+    -- TABLE above (which only applies on first create) -- add it directly.
+    ALTER TABLE discovery_queries ADD COLUMN IF NOT EXISTS last_success_at TIMESTAMPTZ;
     CREATE INDEX IF NOT EXISTS idx_discovery_queries_active ON discovery_queries(platform, active);
 
     CREATE TABLE IF NOT EXISTS creators (

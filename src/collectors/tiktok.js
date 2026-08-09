@@ -8,6 +8,11 @@ const runStatus = require('../lib/runStatus');
 // production (section 18, Phase 0 calibration).
 const ACTOR_ID = process.env.APIFY_TIKTOK_ACTOR_ID || 'clockworks/tiktok-scraper';
 const MAX_ITEMS = Number(process.env.APIFY_MAX_ITEMS_PER_QUERY) || 60;
+// Bounds spend per run rather than trying to hit every seed keyword every
+// time -- prioritises queries that haven't succeeded most recently, so
+// repeated runs rotate through the full list instead of always spending on
+// the same terms (see repo.getActiveQueries).
+const MAX_QUERIES_PER_RUN = Number(process.env.APIFY_MAX_QUERIES_PER_RUN) || 20;
 
 function mapItem(item, query) {
   const nativeId = item.id || item.videoId || item.webVideoUrl;
@@ -57,8 +62,10 @@ async function collect() {
   }
 
   const runId = await repo.startSourceRun('tiktok');
-  const queries = await repo.getActiveQueries('tiktok');
+  const queries = await repo.getActiveQueries('tiktok', { maxResults: MAX_QUERIES_PER_RUN });
+  const alreadyDoneToday = await repo.countSkippableQueries('tiktok');
   runStatus.setStage('tiktok', queries.length);
+  if (alreadyDoneToday > 0) runStatus.pushLog(`TikTok: skipping ${alreadyDoneToday} quer(ies) already collected today`);
   let fetched = 0;
   let newCount = 0;
   const today = new Date().toISOString().slice(0, 10);
@@ -74,6 +81,7 @@ async function collect() {
           shouldDownloadCovers: false,
           shouldDownloadVideos: false
         });
+        await repo.markQuerySuccess(q.id);
       } catch (err) {
         console.error(`[tiktok] query "${q.query_text}" failed:`, err.message);
         runStatus.pushLog(`tiktok "${q.query_text}" failed: ${err.message}`);

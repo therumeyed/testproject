@@ -3,7 +3,14 @@ const { callClaudeJson, isConfigured } = require('./lib/claude');
 const { getNegativeAndExcludeTerms } = require('./lib/repo');
 const runStatus = require('./lib/runStatus');
 
-const BATCH_SIZE = 25;
+// Smaller than it looks: each post in a batch carries caption/hashtags/
+// transcript/comments/metrics, and each resulting cluster in the response
+// carries a full schema (attributes, aliases, conversation themes, etc.) --
+// 25 posts could produce a response that got silently truncated at the old
+// 4096-token cap, which broke JSON.parse ("Unexpected end of JSON input")
+// and skipped clustering for the whole batch. Smaller batch + higher cap
+// below gives real headroom.
+const BATCH_SIZE = 15;
 const PARENT_CATEGORIES = ['beauty_tools_accessories', 'cosmetics', 'beauty_gift_packs'];
 const BRAND_FITS = ['core', 'adjacent', 'content_only', 'out_of_scope'];
 
@@ -220,7 +227,7 @@ async function runClustering() {
       response = await callClaudeJson({
         system: buildSystemPrompt(excludeTerms),
         prompt: buildUserPrompt(batch, commentsByPost, existingTrends),
-        maxTokens: 4096,
+        maxTokens: 8192,
         validate: validateClusterResponse
       });
     } catch (err) {

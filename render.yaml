@@ -7,6 +7,8 @@ envVarGroups:
         sync: false
       - key: APIFY_MAX_ITEMS_PER_QUERY
         value: "60"
+      - key: APIFY_MAX_QUERIES_PER_RUN
+        value: "20"
       - key: APIFY_DEEP_COMMENT_POST_LIMIT
         value: "10"
       - key: APIFY_SHALLOW_COMMENT_LIMIT

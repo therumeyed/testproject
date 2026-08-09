@@ -9,6 +9,7 @@ const runStatus = require('../lib/runStatus');
 // query recall against a live run before production (README "Phase 0").
 const ACTOR_ID = process.env.APIFY_REDDIT_ACTOR_ID || 'trudax/reddit-scraper-lite';
 const MAX_ITEMS = Number(process.env.APIFY_MAX_ITEMS_PER_QUERY) || 60;
+const MAX_QUERIES_PER_RUN = Number(process.env.APIFY_MAX_QUERIES_PER_RUN) || 20;
 
 function mapPost(item, query) {
   const nativeId = item.id || item.parsedId || item.url;
@@ -53,8 +54,10 @@ async function collect() {
   }
 
   const runId = await repo.startSourceRun('reddit');
-  const queries = await repo.getActiveQueries('reddit');
+  const queries = await repo.getActiveQueries('reddit', { maxResults: MAX_QUERIES_PER_RUN });
+  const alreadyDoneToday = await repo.countSkippableQueries('reddit');
   runStatus.setStage('reddit', queries.length);
+  if (alreadyDoneToday > 0) runStatus.pushLog(`Reddit: skipping ${alreadyDoneToday} quer(ies) already collected today`);
   const sampling = await getConfig('comment_sampling');
   let fetched = 0;
   let newCount = 0;
@@ -80,6 +83,7 @@ async function collect() {
           maxComments: isSubreddit ? sampling.deep_sample_size : sampling.shallow_sample_size,
           skipComments: false
         });
+        await repo.markQuerySuccess(q.id);
       } catch (err) {
         console.error(`[reddit] query "${q.query_text}" failed:`, err.message);
         runStatus.pushLog(`reddit "${q.query_text}" failed: ${err.message}`);
