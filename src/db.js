@@ -373,7 +373,7 @@ async function initSchema() {
   `);
 }
 
-async function initSchemaWithRetry(maxAttempts = 10, delayMs = 3000) {
+async function initSchemaWithRetry(maxAttempts = 20, delayMs = 5000) {
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       await initSchema();
@@ -386,4 +386,29 @@ async function initSchemaWithRetry(maxAttempts = 10, delayMs = 3000) {
   }
 }
 
-module.exports = { pool, initSchema, initSchemaWithRetry };
+// For long-running processes (the web server) rather than one-shot scripts
+// (ingest/seed): a fresh Render Blueprint deploy creates the web service and
+// a brand-new Postgres instance at the same time, and first-time database
+// provisioning can take well over a minute -- longer than any bounded retry
+// budget should reasonably block startup for. This never gives up and never
+// throws; it retries with capped exponential backoff until it succeeds, so
+// callers should start serving traffic (and answering /api/health) before
+// awaiting this, not after.
+async function initSchemaForever({ startDelayMs = 3000, maxDelayMs = 20000 } = {}) {
+  let delay = startDelayMs;
+  let attempt = 0;
+  for (;;) {
+    attempt++;
+    try {
+      await initSchema();
+      if (attempt > 1) console.log(`[db] schema init succeeded on attempt ${attempt}`);
+      return;
+    } catch (err) {
+      console.warn(`[db] schema init attempt ${attempt} failed (${err.message}), retrying in ${delay}ms...`);
+      await new Promise((r) => setTimeout(r, delay));
+      delay = Math.min(delay * 1.5, maxDelayMs);
+    }
+  }
+}
+
+module.exports = { pool, initSchema, initSchemaWithRetry, initSchemaForever };

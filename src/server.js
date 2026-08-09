@@ -1,7 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const path = require('path');
-const { pool, initSchemaWithRetry } = require('./db');
+const { pool, initSchemaForever } = require('./db');
 const { seedConfig, getConfig, getAllConfig, setConfig } = require('./config/seedConfig');
 const { listTrends, getTrendDetail, ACTION_LABELS } = require('./lib/trendQueries');
 const { createSessionCookie, clearCookieHeader, requireAuth, requireAdmin, getSessionFromRequest } = require('./lib/auth');
@@ -21,7 +21,15 @@ async function writeAudit(req, action, entityType, entityId, before, after, reas
 // ---------------------------------------------------------------------
 // Health + auth
 // ---------------------------------------------------------------------
-app.get('/api/health', (req, res) => res.json({ ok: true }));
+// Set once the database schema is confirmed reachable (see bottom of this
+// file). Deliberately independent of app.listen() -- on a fresh Render
+// Blueprint deploy the web service and a brand-new Postgres instance start
+// at the same time, and first-time DB provisioning can take over a minute.
+// The port must open immediately regardless, or Render's port scan and
+// health checks have nothing to find while we wait.
+let dbReady = false;
+
+app.get('/api/health', (req, res) => res.json({ ok: true, dbReady }));
 
 app.get('/api/me', (req, res) => {
   const session = getSessionFromRequest(req);
@@ -43,6 +51,14 @@ app.post('/api/login', (req, res) => {
 app.post('/api/logout', (req, res) => {
   res.setHeader('Set-Cookie', clearCookieHeader());
   res.json({ ok: true });
+});
+
+// Login/logout/me above don't touch the database, so they work during
+// startup too. Everything from here on does, so fail fast and clearly
+// instead of letting individual routes throw ECONNREFUSED as 500s.
+app.use('/api', (req, res, next) => {
+  if (!dbReady) return res.status(503).json({ error: 'starting_up', message: 'The service is still starting up. Please retry in a few seconds.' });
+  next();
 });
 
 // Everything below requires a signed-in session.
@@ -386,12 +402,21 @@ app.use('/api/admin', admin);
 
 const port = process.env.PORT || 3000;
 
-initSchemaWithRetry()
+// Bind the port immediately -- Render's port scan and platform health check
+// need something to find right away, independent of how long Postgres
+// takes to become reachable (see the dbReady guard above).
+app.listen(port, () => console.log(`Sportsgirl Beauty Radar listening on port ${port} (database initializing...)`));
+
+initSchemaForever()
   .then(() => seedConfig())
   .then(() => {
-    app.listen(port, () => console.log(`Sportsgirl Beauty Radar listening on port ${port}`));
+    dbReady = true;
+    console.log('Database ready -- serving live data.');
   })
   .catch((err) => {
-    console.error('Failed to init schema:', err);
+    // initSchemaForever never rejects; this only fires if seedConfig itself
+    // throws after a successful connection (e.g. a genuine schema bug) --
+    // that's worth crashing loudly on, unlike a slow-to-start database.
+    console.error('Failed to seed config after schema init:', err);
     process.exit(1);
   });
