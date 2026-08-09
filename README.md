@@ -18,7 +18,8 @@ This build implements the **Phase 1 intelligence MVP** from the product requirem
 - Full CSV bulk-import UI for the product catalogue (the API and data model support it; only single-row add is wired into Admin).
 
 **Needs Phase 0 calibration before going live (per the doc's own Phase 0 requirement):**
-- Exact Apify Actor IDs and their input/output field names. `src/collectors/*.js` use documented, best-guess field mappings for `clockworks/tiktok-scraper`, `apify/instagram-scraper` and `trudax/reddit-scraper-lite`, and a placeholder Google Trends actor -- all overridable via env vars (see `.env.example`). Run a real sample collection against each before trusting the data.
+- Exact Apify Actor IDs and their input/output field names for TikTok, Instagram and Reddit. `src/collectors/*.js` use documented, best-guess field mappings for `clockworks/tiktok-scraper`, `apify/instagram-scraper` and `trudax/reddit-scraper-lite` -- all overridable via env vars (see `.env.example`). Run a real sample collection against each before trusting the data.
+- Google Trends **does not use Apify at all** -- it calls `trends.google.com`'s own free public endpoints directly (same protocol as `pytrends`), no API key or per-run cost. Confirmed while building this: those endpoints return `429` for every request from this project's dev sandbox (both the API and the plain HTML page), which is a known pattern of Google blocking datacenter/cloud IP ranges for that subdomain specifically -- it may or may not be blocked from Render's egress IP too. Check Admin → Source Health after a run to see whether it's actually getting through in production; see the top of `src/collectors/googleTrends.js` for the fallback options if it's persistently blocked there.
 - Score weights and lifecycle/durability thresholds are seeded with reasonable, documented defaults (`src/config/appConfig.js`) and are fully admin-editable -- calibrate against real volumes once live data is flowing (Phase 0 says exactly this).
 
 ## 2. Demoing without live API keys
@@ -53,9 +54,9 @@ Admin users can also trigger this from the dashboard (Admin → "Run collection 
 | TikTok | Posts matching seed keywords, via Apify | `APIFY_TIKTOK_ACTOR_ID`, defaults to `clockworks/tiktok-scraper` |
 | Instagram | Hashtag search (Instagram has no free-text post search) | `APIFY_INSTAGRAM_ACTOR_ID`, defaults to `apify/instagram-scraper` |
 | Reddit | Keyword search + monitored beauty subreddits, posts + comment sample | `APIFY_REDDIT_ACTOR_ID`, defaults to `trudax/reddit-scraper-lite` |
-| Google Trends | Search-interest validation per canonical trend (AU + global), run *after* clustering | `APIFY_GOOGLE_TRENDS_ACTOR_ID` -- no official free API exists, so this is the most likely field-mapping to need adjustment at Phase 0 |
+| Google Trends | Search-interest validation per canonical trend (AU + global), run *after* clustering | **Free, no Apify** -- calls `trends.google.com`'s own public endpoints directly. See the caveat above about cloud-IP blocking. |
 
-All actor IDs are one-line env var overrides so a deprecated/renamed actor doesn't require touching the ingestion pipeline (see `.env.example`) -- same pattern as this account's other Apify-backed dashboards.
+TikTok/Instagram/Reddit actor IDs are one-line env var overrides so a deprecated/renamed actor doesn't require touching the ingestion pipeline (see `.env.example`) -- same pattern as this account's other Apify-backed dashboards.
 
 Comment sampling: a shallow sample (`APIFY_SHALLOW_COMMENT_LIMIT`, default 15) for keyword-search results, a deeper sample (`APIFY_DEEP_COMMENT_LIMIT`, default 60) for monitored subreddits -- tunable in Admin → Score weights & thresholds (`comment_sampling` key) without a redeploy.
 

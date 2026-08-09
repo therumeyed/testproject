@@ -179,21 +179,30 @@ async function seedEvidence(runs, { platforms, dailyPattern, captionFn, hashtags
   return { postIds, startDate };
 }
 
-async function seedGoogleTrends(trendId, name, { au, global }) {
+// "Breakout" is a property of Google's rising RELATED queries, not of the
+// daily interest-index timeline (see scoring.js getGoogleTrendsSignal) --
+// pass breakoutQuery to seed one for trends meant to demo that state.
+async function seedGoogleTrends(trendId, name, { au, global, breakoutQuery }) {
   const startDate = addDays(today, -29);
   for (let i = 0; i < 30; i++) {
     const day = addDays(startDate, i);
     const auVal = Math.max(0, Math.round(au[0] + (au[1] - au[0]) * (i / 29) + rand(-5, 5)));
     const globalVal = Math.max(0, Math.round(global[0] + (global[1] - global[0]) * (i / 29) + rand(-5, 5)));
     await pool.query(
-      `INSERT INTO google_trends_series (trend_topic_id, country, search_term, series_date, interest_index, is_breakout)
-       VALUES ($1,'AU',$2,$3,$4,$5) ON CONFLICT DO NOTHING`,
-      [trendId, name, iso(day), auVal, auVal > 80]
+      `INSERT INTO google_trends_series (trend_topic_id, country, search_term, series_date, interest_index)
+       VALUES ($1,'AU',$2,$3,$4) ON CONFLICT DO NOTHING`,
+      [trendId, name, iso(day), auVal]
     );
     await pool.query(
-      `INSERT INTO google_trends_series (trend_topic_id, country, search_term, series_date, interest_index, is_breakout)
-       VALUES ($1,'GLOBAL',$2,$3,$4,$5) ON CONFLICT DO NOTHING`,
-      [trendId, name, iso(day), globalVal, false]
+      `INSERT INTO google_trends_series (trend_topic_id, country, search_term, series_date, interest_index)
+       VALUES ($1,'GLOBAL',$2,$3,$4) ON CONFLICT DO NOTHING`,
+      [trendId, name, iso(day), globalVal]
+    );
+  }
+  if (breakoutQuery) {
+    await pool.query(
+      `INSERT INTO trend_related_queries (trend_topic_id, country, query_text, rising_value, series_date) VALUES ($1,'AU',$2,'Breakout',$3)`,
+      [trendId, breakoutQuery, iso(today)]
     );
   }
 }
@@ -257,7 +266,7 @@ async function run() {
     ]
   });
   await linkPosts(t1, e1.postIds);
-  await seedGoogleTrends(t1, 'brown lip liner gloss combo', { au: [15, 42], global: [25, 55] });
+  await seedGoogleTrends(t1, 'brown lip liner gloss combo', { au: [15, 42], global: [25, 55], breakoutQuery: 'espresso lips near me' });
   await addConversationSummary(t1, {
     conversationThemes: ['Affordable two-step lip look', 'Pairing a brown liner with clear gloss for definition without heaviness'],
     questions: ['Where can I buy an affordable brown liner?', 'How long does the combo last before reapplying?'],

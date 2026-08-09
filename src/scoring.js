@@ -217,7 +217,7 @@ async function getLatestPlatformAggregates(trendId) {
 
 async function getGoogleTrendsSignal(trendId) {
   const { rows } = await pool.query(
-    `SELECT country, series_date, interest_index, is_breakout FROM google_trends_series
+    `SELECT country, series_date, interest_index FROM google_trends_series
      WHERE trend_topic_id = $1 ORDER BY series_date DESC LIMIT 30`,
     [trendId]
   );
@@ -226,11 +226,21 @@ async function getGoogleTrendsSignal(trendId) {
   const latestAu = au[0]?.interest_index ?? null;
   const priorAu = au[7]?.interest_index ?? null;
   const auDirection = latestAu != null && priorAu != null ? latestAu - priorAu : null;
+
+  // "Breakout" is a property of Google's rising RELATED queries, not of the
+  // daily interest-index timeline -- check trend_related_queries instead of
+  // treating any single day's index as a breakout.
+  const { rows: breakoutRows } = await pool.query(
+    `SELECT 1 FROM trend_related_queries WHERE trend_topic_id = $1 AND country = 'AU' AND rising_value = 'Breakout'
+     AND series_date >= CURRENT_DATE - INTERVAL '14 days' LIMIT 1`,
+    [trendId]
+  );
+
   return {
     hasData: rows.length > 0,
     latestAu, auDirection,
     latestGlobal: global[0]?.interest_index ?? null,
-    auBreakout: au.some((r) => r.is_breakout)
+    auBreakout: breakoutRows.length > 0
   };
 }
 
