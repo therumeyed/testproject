@@ -37,23 +37,31 @@ services:
           name: sportsgirl-beauty-radar-db
           property: connectionString
 
-  - type: cron
-    name: sportsgirl-beauty-radar-ingest
-    runtime: node
-    plan: starter
-    # 18:00 UTC = before 6am AEST next day, well before the AU business day.
-    # Render cron is UTC-only, no DST awareness -- during AEDT this lands an
-    # hour later local time; acceptable slack for a "before business day"
-    # target, revisit if a tighter window is needed.
-    schedule: "0 18 * * *"
-    buildCommand: npm install
-    startCommand: node src/ingest.js
-    envVars:
-      - fromGroup: sportsgirl-beauty-radar-secrets
-      - key: DATABASE_URL
-        fromDatabase:
-          name: sportsgirl-beauty-radar-db
-          property: connectionString
+  # PAUSED (2026-08-10) to stop nightly Anthropic/Apify spend while manually
+  # re-tuning cost/quality via Admin -- see README "Cost control". Render
+  # Blueprint sync does NOT delete/suspend an already-created cron service
+  # just because it's removed from this file; you must also manually
+  # suspend "sportsgirl-beauty-radar-ingest" in the Render dashboard
+  # (Cron Job -> Settings -> Suspend), otherwise the existing schedule
+  # keeps firing regardless of this edit. Uncomment + redeploy + resume in
+  # the dashboard to re-enable.
+  # - type: cron
+  #   name: sportsgirl-beauty-radar-ingest
+  #   runtime: node
+  #   plan: starter
+  #   # 18:00 UTC = before 6am AEST next day, well before the AU business day.
+  #   # Render cron is UTC-only, no DST awareness -- during AEDT this lands an
+  #   # hour later local time; acceptable slack for a "before business day"
+  #   # target, revisit if a tighter window is needed.
+  #   schedule: "0 18 * * *"
+  #   buildCommand: npm install
+  #   startCommand: node src/ingest.js
+  #   envVars:
+  #     - fromGroup: sportsgirl-beauty-radar-secrets
+  #     - key: DATABASE_URL
+  #       fromDatabase:
+  #         name: sportsgirl-beauty-radar-db
+  #         property: connectionString
 
 databases:
   - name: sportsgirl-beauty-radar-db

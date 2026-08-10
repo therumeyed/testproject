@@ -25,15 +25,17 @@ const CONCURRENCY = Number(process.env.ANTHROPIC_CLUSTER_CONCURRENCY) || 12;
 // How many unclustered posts to pull from the DB per outer round (run
 // CONCURRENCY of them at a time).
 const CHUNK_FETCH_SIZE = 300;
-// Optional cheaper/faster model just for the matching pass -- categorising
-// a post against a known trend list needs far less reasoning than writing
-// social/buying copy, so this is a reasonable place to trade some judgment
-// for speed/cost if you want to. Unset by default (uses the same model as
-// everything else); set e.g. to a Haiku model id to opt in.
-const CLUSTER_MODEL = process.env.ANTHROPIC_CLUSTER_MODEL || undefined;
+// Categorising a post against a known trend list needs far less reasoning
+// than writing social/buying copy, and this runs once per POST (thousands
+// of calls per run) rather than once per trend -- on Sonnet this was the
+// dominant cost driver. Defaults to Haiku; set ANTHROPIC_CLUSTER_MODEL to
+// override (e.g. back to Sonnet if classification quality suffers).
+const CLUSTER_MODEL = process.env.ANTHROPIC_CLUSTER_MODEL || 'claude-haiku-4-5-20251001';
 // How many existing trends get sent as context per classification call --
 // see the comment on fetchExistingTrends() for why this is capped now.
-const EXISTING_TRENDS_CONTEXT_LIMIT = Number(process.env.ANTHROPIC_CLUSTER_TREND_CONTEXT_LIMIT) || 60;
+// This is the biggest recurring per-call cost (resent on every single
+// post's call, not once per batch), so it's kept tight by default.
+const EXISTING_TRENDS_CONTEXT_LIMIT = Number(process.env.ANTHROPIC_CLUSTER_TREND_CONTEXT_LIMIT) || 25;
 
 const MIN_ALIAS_MATCH_LENGTH = 4; // avoid ultra-short aliases causing false-positive substring matches
 
