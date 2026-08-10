@@ -31,6 +31,9 @@ const CHUNK_FETCH_SIZE = 300;
 // for speed/cost if you want to. Unset by default (uses the same model as
 // everything else); set e.g. to a Haiku model id to opt in.
 const CLUSTER_MODEL = process.env.ANTHROPIC_CLUSTER_MODEL || undefined;
+// How many existing trends get sent as context per classification call --
+// see the comment on fetchExistingTrends() for why this is capped now.
+const EXISTING_TRENDS_CONTEXT_LIMIT = Number(process.env.ANTHROPIC_CLUSTER_TREND_CONTEXT_LIMIT) || 60;
 
 const MIN_ALIAS_MATCH_LENGTH = 4; // avoid ultra-short aliases causing false-positive substring matches
 
@@ -96,15 +99,31 @@ async function fetchTopComments(postIds) {
   return byPost;
 }
 
-async function fetchExistingTrends() {
+// limit=null (used by the free alias pre-match below) means "all of them" --
+// it costs nothing to check every trend/alias in plain code. limit=N (used
+// before every Claude call) bounds token cost: with per-post classification
+// now making many more, smaller calls than batching did, the existing-
+// trends context gets re-sent on EVERY call instead of once per batch, so
+// an uncapped list would make growing the trend catalog quietly more
+// expensive per post over time. Most-recently-active first, since a new
+// post is statistically far more likely to be about a currently-live trend
+// than a long-dormant one -- and the alias pre-match already catches exact
+// name/alias matches regardless of recency, so this only trades away
+// coverage for the harder, non-literal matches against old, quiet trends.
+async function fetchExistingTrends(limit = null) {
   const res = await pool.query(
-    `SELECT t.id, t.name, t.definition, t.parent_category, t.subcategory, t.brand_fit,
-            array_agg(DISTINCT a.alias_text) FILTER (WHERE a.alias_text IS NOT NULL) AS aliases
-     FROM trend_topics t
-     LEFT JOIN trend_aliases a ON a.trend_topic_id = t.id
-     WHERE t.status = 'active'
-     GROUP BY t.id
-     ORDER BY t.id`
+    `SELECT id, name, definition, parent_category, subcategory, brand_fit, aliases FROM (
+       SELECT t.id, t.name, t.definition, t.parent_category, t.subcategory, t.brand_fit, t.last_active_date,
+              array_agg(DISTINCT a.alias_text) FILTER (WHERE a.alias_text IS NOT NULL) AS aliases
+       FROM trend_topics t
+       LEFT JOIN trend_aliases a ON a.trend_topic_id = t.id
+       WHERE t.status = 'active'
+       GROUP BY t.id
+       ORDER BY t.last_active_date DESC NULLS LAST, t.id DESC
+       ${limit ? 'LIMIT $1' : ''}
+     ) ranked
+     ORDER BY id`,
+    limit ? [limit] : []
   );
   return res.rows;
 }
@@ -322,7 +341,7 @@ async function runClustering() {
 
     const commentsByPost = await fetchTopComments(posts.map((p) => p.id));
     const excludeTerms = await getNegativeAndExcludeTerms();
-    const existingTrendsRef = await fetchExistingTrends(); // shared + mutable across this round's concurrent workers
+    const existingTrendsRef = await fetchExistingTrends(EXISTING_TRENDS_CONTEXT_LIMIT); // shared + mutable across this round's concurrent workers
 
     const results = await runWithConcurrency(posts, CONCURRENCY, async (post) => {
       const n = await classifyPost(post, commentsByPost, existingTrendsRef, excludeTerms);
