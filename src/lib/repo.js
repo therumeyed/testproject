@@ -65,6 +65,13 @@ async function getNegativeAndExcludeTerms() {
   return res.rows;
 }
 
+async function getIncludeTerms() {
+  const res = await pool.query(
+    `SELECT term FROM taxonomy_terms WHERE active = true AND term_type = 'include'`
+  );
+  return res.rows;
+}
+
 // Cheap, deterministic pre-filter applied before evidence ever reaches
 // Claude -- e.g. a viral "hair dryer" post never gets classified as
 // relevant no matter how high its view count (section 3.4).
@@ -177,6 +184,6 @@ async function upsertComment(comment) {
 
 module.exports = {
   startSourceRun, finishSourceRun, getActiveQueries, countSkippableQueries, markQuerySuccess,
-  getNegativeAndExcludeTerms, isExcludedText,
+  getNegativeAndExcludeTerms, getIncludeTerms, isExcludedText,
   upsertCreator, upsertRawItem, upsertPost, upsertMetricSnapshot, recordQueryMatch, upsertComment
 };

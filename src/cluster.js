@@ -1,6 +1,6 @@
 const { pool } = require('./db');
 const { callClaudeJson, isConfigured } = require('./lib/claude');
-const { getNegativeAndExcludeTerms } = require('./lib/repo');
+const { getNegativeAndExcludeTerms, getIncludeTerms } = require('./lib/repo');
 const runStatus = require('./lib/runStatus');
 
 // Sampling-based clustering (replaces the old per-post Claude classifier).
@@ -210,11 +210,6 @@ function computePhraseFrequencies(posts) {
   return freq;
 }
 
-// Ranks candidate phrases by how many distinct posts used them, drops ones
-// under the MIN_PHRASE_POST_COUNT threshold or matching a configured
-// exclude/negative-keyword term, and prunes near-duplicates (a shorter
-// phrase that's just a substring of an already-picked, more frequent one --
-// e.g. "chrome nail" once "chrome nails" is already picked).
 // How much two phrases' post-sets overlap (as a fraction of the smaller
 // set) -- catches near-duplicate phrases pointing at the same underlying
 // posts even when the text itself doesn't share a substring (e.g. "chrome
@@ -227,12 +222,46 @@ function postSetOverlap(a, b) {
   return shared / small.size;
 }
 
-function selectTopPhrases(freq, excludeTerms, topN) {
+// Word-level vocabulary pulled from the taxonomy's 'include' terms (nail,
+// lash, lip, mirror, glitter, chrome, rhinestone, ...). Frequency alone
+// isn't enough to pick good candidate phrases -- generic social-media
+// boilerplate ("any questions", "link in comments", "first time", "viral")
+// and meme/sound references ("chat gpt", "dr seuss") repeat across nearly
+// EVERY viral post regardless of topic, so on pure frequency they
+// out-rank genuinely niche beauty phrasing and burn the top-N budget on
+// noise Claude just rejects anyway. Substring (not exact-word) matching so
+// this also catches compound hashtag candidates like "chromenails".
+function buildVocabulary(includeTerms) {
+  const words = new Set();
+  for (const { term } of includeTerms) {
+    for (const w of term.toLowerCase().split(/[\s-]+/)) {
+      if (w.length >= MIN_ALIAS_MATCH_LENGTH) words.add(w);
+    }
+  }
+  return [...words];
+}
+
+function matchesVocabulary(phrase, vocabWords) {
+  return vocabWords.some((w) => phrase.includes(w));
+}
+
+function selectTopPhrases(freq, excludeTerms, vocabWords, topN) {
   const excludeLower = excludeTerms.map((t) => t.term.toLowerCase());
   const candidates = [...freq.entries()]
     .filter(([, postIds]) => postIds.size >= MIN_PHRASE_POST_COUNT)
     .filter(([phrase]) => !excludeLower.some((term) => phrase.includes(term)))
-    .sort((a, b) => b[1].size - a[1].size);
+    .filter(([phrase]) => matchesVocabulary(phrase, vocabWords))
+    // Longer phrases first, not just more frequent ones: a 3-word phrase's
+    // post-set is naturally a subset of its shorter 2-word "parent", so
+    // sorting on frequency alone always picks the more generic phrase
+    // ("setting spray") and prunes the more specific, more actionable one
+    // ("waterproof setting spray") as a near-duplicate. Preferring length
+    // first means the specific phrase gets picked and the generic parent
+    // gets pruned instead, when they're substantially the same posts.
+    .sort((a, b) => {
+      const lenDiff = b[0].split(' ').length - a[0].split(' ').length;
+      return lenDiff !== 0 ? lenDiff : b[1].size - a[1].size;
+    });
 
   // A plain n-gram sweep naturally produces many overlapping fragments of
   // the SAME underlying post cluster ("chrome nails", "chromenails",
@@ -422,8 +451,9 @@ async function runClustering() {
   const postsById = new Map(posts.map((p) => [p.id, p]));
 
   const excludeTerms = await getNegativeAndExcludeTerms();
+  const vocabWords = buildVocabulary(await getIncludeTerms());
   const freq = computePhraseFrequencies(posts);
-  const topPhrases = selectTopPhrases(freq, excludeTerms, TOP_PHRASE_COUNT);
+  const topPhrases = selectTopPhrases(freq, excludeTerms, vocabWords, TOP_PHRASE_COUNT);
 
   if (topPhrases.length === 0) {
     runStatus.setStage('clustering', 0);
