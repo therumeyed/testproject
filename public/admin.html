@@ -11,12 +11,21 @@
   <div class="section-head">
     <div><h1>Admin / Tracking Settings</h1><p class="subtitle">Taxonomy, thresholds, sources and governance.</p></div>
     <div style="display:flex;gap:8px;">
-      <button id="rerun">Run collection now</button>
-      <button id="clusterOnly" class="secondary" title="Skips TikTok/Instagram/Reddit and goes straight to clustering existing evidence -- use this to resume after a Claude-side failure without re-collecting.">Cluster &amp; score existing data</button>
       <button id="stopRun" class="secondary" style="display:none;background:var(--bad-soft);color:var(--bad);border-color:var(--bad);">Stop run</button>
     </div>
   </div>
-
+  <!--
+    "Run collection now" / "Cluster & score existing data" buttons removed
+    (2026-08-10) -- this page has no login gate, so anyone with the URL
+    (e.g. Sportsgirl, once this dashboard is shared) could otherwise
+    trigger a paid Apify/Anthropic run with one click. Re-add once weekly
+    scheduled reporting is organised and self-serve triggering is wanted
+    again. The backend routes (/api/admin/rerun, /rerun/cluster-only,
+    /rerun/stop) are untouched -- still triggerable directly (e.g. curl)
+    if you want to kick off a run yourself without exposing the buttons.
+    Stop stays visible so an in-progress run (however it was started) can
+    still be halted from here.
+  -->
   <div id="runProgress" class="run-progress" style="display:none;">
     <div class="stage-row">
       <span class="stage-name" id="rpStageName">—</span>
@@ -184,9 +193,6 @@ function renderRunStatus(s) {
 
   document.getElementById('rpLog').innerHTML = s.log.map((l) => `<div>${new Date(l.t).toLocaleTimeString('en-AU')} — ${esc(l.line)}</div>`).join('');
 
-  document.getElementById('rerun').disabled = s.running;
-  document.getElementById('rerun').textContent = s.running ? 'Run in progress…' : 'Run collection now';
-  document.getElementById('clusterOnly').disabled = s.running;
   document.getElementById('stopRun').style.display = s.running ? 'inline-block' : 'none';
   document.getElementById('stopRun').disabled = s.stopRequested;
   document.getElementById('stopRun').textContent = s.stopRequested ? 'Stopping…' : 'Stop run';
@@ -228,31 +234,14 @@ async function pollRunStatus() {
     loadProducts();
   });
 
-  document.getElementById('rerun').addEventListener('click', async () => {
-    try {
-      await api('/api/admin/rerun', { method: 'POST' });
-    } catch (err) {
-      if (!String(err.message).includes('already_running')) throw err;
-    }
-    pollRunStatus();
-  });
-
   document.getElementById('stopRun').addEventListener('click', async () => {
     await api('/api/admin/rerun/stop', { method: 'POST' });
     pollRunStatus();
   });
 
-  document.getElementById('clusterOnly').addEventListener('click', async () => {
-    try {
-      await api('/api/admin/rerun/cluster-only', { method: 'POST' });
-    } catch (err) {
-      if (!String(err.message).includes('already_running')) throw err;
-    }
-    pollRunStatus();
-  });
-
-  // Resume showing progress if a run was already in flight when this page loaded
-  // (e.g. someone clicked "Run collection now" and then reloaded).
+  // Resume showing progress if a run is already in flight when this page loads
+  // (e.g. triggered directly via the API -- see the comment near
+  // #runProgress for why the trigger buttons themselves were removed).
   pollRunStatus();
 
   await Promise.all([loadTaxonomy(), loadQueries(), loadConfig(), loadProducts(), loadAudit()]);
