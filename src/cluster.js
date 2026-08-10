@@ -3,15 +3,19 @@ const { callClaudeJson, isConfigured } = require('./lib/claude');
 const { getNegativeAndExcludeTerms } = require('./lib/repo');
 const runStatus = require('./lib/runStatus');
 
-// Bigger than the old value now that the per-cluster schema is much
-// leaner (no conversation-intelligence fields -- see note below), so a
-// batch's response stays well within budget even with more posts in it.
-const BATCH_SIZE = 30;
+// Kept conservative on purpose: what actually drives response size is how
+// many DISTINCT trends a batch maps to, not the schema weight, and that's
+// genuinely unpredictable per batch (a batch of very novel/diverse posts
+// can still produce far more cluster objects than a batch this size
+// "should" need). 30 truncated repeatedly even at an 8192 token cap; 15 is
+// the size actually proven reliable. Throughput now comes from
+// concurrency, not from pushing batch size up.
+const BATCH_SIZE = 15;
 // How many Claude calls run at once. This is the single biggest lever on
 // wall-clock time -- clustering was strictly sequential before (one call,
 // wait, next call), which is the main reason it took ages on a large
 // backlog. Tune via ANTHROPIC_CLUSTER_CONCURRENCY if needed.
-const CONCURRENCY = Number(process.env.ANTHROPIC_CLUSTER_CONCURRENCY) || 4;
+const CONCURRENCY = Number(process.env.ANTHROPIC_CLUSTER_CONCURRENCY) || 6;
 // How many unclustered posts to pull from the DB per outer round (split
 // into BATCH_SIZE-sized chunks and run CONCURRENCY at a time).
 const CHUNK_FETCH_SIZE = 300;
@@ -162,7 +166,8 @@ RULES:
 - If a post doesn't have enough evidence to confidently place in a specific trend, leave it out of every cluster and list its id in "unclusteredPostIds" instead of guessing.
 - If a cluster of posts matches an EXISTING canonical trend (given below), set "existingTrendId" to that trend's id instead of creating a near-duplicate. Only create a new trend if none of the existing ones fit.
 - Classify brandFit honestly: "out_of_scope" for anything popular but irrelevant to Sportsgirl's actual range/audience (e.g. a viral hair dryer).
-- Return ONLY valid JSON, no other text.`;
+- Keep every text field terse -- definitions and names are short phrases, not sentences with extra commentary.
+- Return ONLY valid, COMPACT JSON: no markdown code fences, no pretty-printing, no indentation or extra whitespace/newlines between fields. One line per object where possible. Every character you don't need costs output budget that's better spent on more clusters.`;
 }
 
 function buildUserPrompt(posts, commentsByPost, existingTrends) {
