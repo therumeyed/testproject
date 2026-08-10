@@ -147,7 +147,14 @@ async function generateForTrend(trend, latestScore) {
     system: 'You are the conversation-intelligence and recommendation engine for Sportsgirl Beauty Radar. Ground every claim in the supplied evidence; never invent facts.',
     prompt: buildPrompt(trend, latestScore, evidence, comments),
     maxTokens: 3072,
-    validate: validateRecResponse
+    validate: validateRecResponse,
+    // Same fix as cluster.js's classifyPhrase: at default temperature the
+    // model occasionally lands its first sampled token on a stop token,
+    // producing a genuine 0-char response (stop_reason=end_turn, not
+    // max_tokens truncation). Each trend only gets ONE recommendation here
+    // (not several variants to pick from), so there's no real use for
+    // sampling randomness to trade away for that reliability.
+    temperature: 0
   });
 
   if (response.conversationSummary && !existingTypes.has('conversation_summary')) {
