@@ -19,6 +19,8 @@ const state = {
   startedAt: null,
   finishedAt: null,
   error: null,
+  stopped: false,
+  stopRequested: false,
   stageKey: null,
   current: 0,
   total: 0,
@@ -31,11 +33,28 @@ function startRun() {
   state.startedAt = new Date().toISOString();
   state.finishedAt = null;
   state.error = null;
+  state.stopped = false;
+  state.stopRequested = false;
   state.stageKey = null;
   state.current = 0;
   state.total = 0;
   state.detail = '';
   state.log = [];
+}
+
+// Cooperative cancellation: every collector/cluster/scoring/recommend loop
+// checks isStopRequested() between items and bails out early. This won't
+// interrupt a single Apify actor call already in flight, but it stops the
+// next one from starting -- the only way to actually halt a run before
+// this existed was restarting the whole web service.
+function requestStop() {
+  if (!state.running) return;
+  state.stopRequested = true;
+  pushLog('Stop requested -- halting as soon as the current step finishes.');
+}
+
+function isStopRequested() {
+  return state.stopRequested;
 }
 
 function setStage(stageKey, total = 0) {
@@ -60,8 +79,9 @@ function pushLog(line) {
 function finishRun(err) {
   state.running = false;
   state.finishedAt = new Date().toISOString();
+  state.stopped = state.stopRequested;
   state.error = err ? String(err.message || err) : null;
-  pushLog(err ? `Run failed: ${state.error}` : 'Run complete.');
+  pushLog(state.stopped ? 'Run stopped by user.' : (err ? `Run failed: ${state.error}` : 'Run complete.'));
 }
 
 function getStatus() {
@@ -75,4 +95,4 @@ function getStatus() {
   };
 }
 
-module.exports = { startRun, setStage, tick, pushLog, finishRun, getStatus, STAGES };
+module.exports = { startRun, requestStop, isStopRequested, setStage, tick, pushLog, finishRun, getStatus, STAGES };

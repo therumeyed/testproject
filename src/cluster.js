@@ -263,6 +263,7 @@ async function runClustering() {
   let batch = await fetchUnclusteredPosts(BATCH_SIZE);
 
   while (batch.length > 0) {
+    if (runStatus.isStopRequested()) { runStatus.pushLog('Clustering: stopping.'); break; }
     const commentsByPost = await fetchTopComments(batch.map((p) => p.id));
     const excludeTerms = await getNegativeAndExcludeTerms();
 

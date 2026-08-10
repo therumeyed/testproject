@@ -455,6 +455,7 @@ async function computeAndStoreScores(dateStr) {
   let scored = 0;
 
   for (const trend of trends) {
+    if (runStatus.isStopRequested()) { runStatus.pushLog('Scoring: stopping.'); break; }
     runStatus.tick(trend.name);
     const ageInfo = await computeAgeAndLifecycle(trend, dateStr, thresholds);
     const scores = await computeScoresForTrend(trend, ageInfo, weights);

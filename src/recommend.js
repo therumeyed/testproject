@@ -171,6 +171,7 @@ async function runRecommendations() {
   runStatus.setStage('recommendations', trends.length);
   let generated = 0;
   for (const trend of trends) {
+    if (runStatus.isStopRequested()) { runStatus.pushLog('Recommendations: stopping.'); break; }
     runStatus.tick(trend.name);
     try {
       const result = await generateForTrend(trend, trend);

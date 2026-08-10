@@ -15,21 +15,31 @@ async function finishSourceRun(id, { status, itemsFetched, itemsNew, errorMessag
   );
 }
 
-// Skips any query already successfully collected today (no point re-spending
-// Apify credit re-fetching the same keyword twice in one day), and caps how
-// many get attempted this run -- prioritising whichever haven't succeeded
-// most recently (NULLS FIRST puts queries that have never once succeeded at
-// the front), so repeated runs rotate through the full seed list over time
-// instead of always hammering the same handful and exhausting API tokens
-// trying to cover everything in a single run.
+// Skips any query already successfully collected recently (no point
+// re-spending Apify credit re-fetching the same keyword twice), and caps
+// how many get attempted this run -- prioritising whichever haven't
+// succeeded most recently (NULLS FIRST puts queries that have never once
+// succeeded at the front), so repeated runs rotate through the full seed
+// list over time instead of always hammering the same handful and
+// exhausting API tokens trying to cover everything in a single run.
+//
+// Deliberately a ROLLING window (hours since last success), not a calendar-
+// date comparison -- Postgres's CURRENT_DATE runs on UTC, and this tool's
+// primary market is Australia (UTC+10/+11), where the UTC date rolls over
+// mid-morning local time, not at local midnight. A date-based check meant
+// two runs an hour apart, both clearly "the same day" locally, could land
+// on either side of that UTC boundary and wrongly be treated as different
+// days -- which is exactly what caused a full needless re-fetch here.
+const RECOLLECT_WINDOW_HOURS = Number(process.env.QUERY_RECOLLECT_HOURS) || 20;
+
 async function getActiveQueries(platform, { maxResults } = {}) {
   const res = await pool.query(
     `SELECT id, platform, query_type, query_text, category_hint, last_success_at FROM discovery_queries
      WHERE platform = $1 AND active = true AND status = 'approved'
-       AND (last_success_at IS NULL OR last_success_at::date < CURRENT_DATE)
+       AND (last_success_at IS NULL OR last_success_at < now() - ($2 || ' hours')::interval)
      ORDER BY last_success_at ASC NULLS FIRST, id
-     ${maxResults ? 'LIMIT $2' : ''}`,
-    maxResults ? [platform, maxResults] : [platform]
+     ${maxResults ? 'LIMIT $3' : ''}`,
+    maxResults ? [platform, RECOLLECT_WINDOW_HOURS, maxResults] : [platform, RECOLLECT_WINDOW_HOURS]
   );
   return res.rows;
 }
@@ -38,8 +48,8 @@ async function countSkippableQueries(platform) {
   const res = await pool.query(
     `SELECT count(*)::int AS n FROM discovery_queries
      WHERE platform = $1 AND active = true AND status = 'approved'
-       AND last_success_at IS NOT NULL AND last_success_at::date = CURRENT_DATE`,
-    [platform]
+       AND last_success_at IS NOT NULL AND last_success_at >= now() - ($2 || ' hours')::interval`,
+    [platform, RECOLLECT_WINDOW_HOURS]
   );
   return res.rows[0].n;
 }

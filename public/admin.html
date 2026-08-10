@@ -10,7 +10,10 @@
 <div class="wrap">
   <div class="section-head">
     <div><h1>Admin / Tracking Settings</h1><p class="subtitle">Taxonomy, thresholds, sources and governance.</p></div>
-    <button id="rerun">Run collection now</button>
+    <div style="display:flex;gap:8px;">
+      <button id="rerun">Run collection now</button>
+      <button id="stopRun" class="secondary" style="display:none;background:var(--bad-soft);color:var(--bad);border-color:var(--bad);">Stop run</button>
+    </div>
   </div>
 
   <div id="runProgress" class="run-progress" style="display:none;">
@@ -148,7 +151,7 @@ function renderRunStatus(s) {
 
   document.getElementById('rpStageName').textContent = s.running
     ? (s.stageLabel || 'Starting…')
-    : (s.error ? 'Run failed' : 'Last run finished');
+    : (s.stopped ? 'Run stopped' : (s.error ? 'Run failed' : 'Last run finished'));
   document.getElementById('rpStageCount').textContent = s.total ? `${s.current} / ${s.total}` : '';
 
   const pct = s.total ? Math.min(100, Math.round((s.current / s.total) * 100)) : (s.running ? 5 : 100);
@@ -163,8 +166,11 @@ function renderRunStatus(s) {
 
   const statusEl = document.getElementById('rpStatus');
   if (s.running) {
-    statusEl.textContent = '';
+    statusEl.textContent = s.stopRequested ? 'Stopping…' : '';
     statusEl.className = 'status-line';
+  } else if (s.stopped) {
+    statusEl.textContent = `Stopped at ${new Date(s.finishedAt).toLocaleTimeString('en-AU')}`;
+    statusEl.className = 'status-line err';
   } else if (s.error) {
     statusEl.textContent = `Failed: ${s.error}`;
     statusEl.className = 'status-line err';
@@ -179,6 +185,9 @@ function renderRunStatus(s) {
 
   document.getElementById('rerun').disabled = s.running;
   document.getElementById('rerun').textContent = s.running ? 'Run in progress…' : 'Run collection now';
+  document.getElementById('stopRun').style.display = s.running ? 'inline-block' : 'none';
+  document.getElementById('stopRun').disabled = s.stopRequested;
+  document.getElementById('stopRun').textContent = s.stopRequested ? 'Stopping…' : 'Stop run';
 }
 
 async function pollRunStatus() {
@@ -223,6 +232,11 @@ async function pollRunStatus() {
     } catch (err) {
       if (!String(err.message).includes('already_running')) throw err;
     }
+    pollRunStatus();
+  });
+
+  document.getElementById('stopRun').addEventListener('click', async () => {
+    await api('/api/admin/rerun/stop', { method: 'POST' });
     pollRunStatus();
   });
 

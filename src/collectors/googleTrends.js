@@ -125,6 +125,7 @@ async function collectForActiveTrends() {
   let failures = 0;
   try {
     for (const trend of trends) {
+      if (runStatus.isStopRequested()) { runStatus.pushLog('Google Trends: stopping.'); break; }
       runStatus.tick(trend.name);
       for (const geo of ['', 'AU']) {
         try {

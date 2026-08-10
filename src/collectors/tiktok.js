@@ -65,13 +65,14 @@ async function collect() {
   const queries = await repo.getActiveQueries('tiktok', { maxResults: MAX_QUERIES_PER_RUN });
   const alreadyDoneToday = await repo.countSkippableQueries('tiktok');
   runStatus.setStage('tiktok', queries.length);
-  if (alreadyDoneToday > 0) runStatus.pushLog(`TikTok: skipping ${alreadyDoneToday} quer(ies) already collected today`);
+  if (alreadyDoneToday > 0) runStatus.pushLog(`TikTok: skipping ${alreadyDoneToday} quer(ies) collected recently`);
   let fetched = 0;
   let newCount = 0;
   const today = new Date().toISOString().slice(0, 10);
 
   try {
     for (const q of queries) {
+      if (runStatus.isStopRequested()) { runStatus.pushLog('TikTok: stopping.'); break; }
       runStatus.tick(q.query_text);
       let items;
       try {

@@ -351,6 +351,13 @@ admin.post('/products/:trendId/match', async (req, res) => {
 
 admin.get('/rerun-status', (req, res) => res.json(runStatus.getStatus()));
 
+admin.post('/rerun/stop', async (req, res) => {
+  if (!runStatus.getStatus().running) return res.status(400).json({ error: 'not_running' });
+  runStatus.requestStop();
+  await writeAudit(req, 'manual_rerun_stop_requested', 'ingest', null, null, null);
+  res.json({ ok: true });
+});
+
 admin.post('/rerun', async (req, res) => {
   if (runStatus.getStatus().running) {
     return res.status(409).json({ error: 'already_running', message: 'A collection run is already in progress.' });
@@ -369,14 +376,25 @@ admin.post('/rerun', async (req, res) => {
     const { runRecommendations } = require('./recommend');
     const today = new Date().toISOString().slice(0, 10);
 
+    // Checked between stages too, not just within each one, so a stop
+    // requested near the end of a stage doesn't still kick off the next one.
     for (const collector of [tiktok, instagram, reddit]) {
+      if (runStatus.isStopRequested()) break;
       await collector.collect().catch((e) => console.error('[rerun] collector failed:', e.message));
     }
-    await runClustering().catch((e) => console.error('[rerun] clustering failed:', e.message));
-    await googleTrends.collectForActiveTrends().catch((e) => console.error('[rerun] google trends failed:', e.message));
-    await computeAllDailyMetrics(today);
-    await computeAndStoreScores(today);
-    await runRecommendations().catch((e) => console.error('[rerun] recommendations failed:', e.message));
+    if (!runStatus.isStopRequested()) {
+      await runClustering().catch((e) => console.error('[rerun] clustering failed:', e.message));
+    }
+    if (!runStatus.isStopRequested()) {
+      await googleTrends.collectForActiveTrends().catch((e) => console.error('[rerun] google trends failed:', e.message));
+    }
+    if (!runStatus.isStopRequested()) {
+      await computeAllDailyMetrics(today);
+      await computeAndStoreScores(today);
+    }
+    if (!runStatus.isStopRequested()) {
+      await runRecommendations().catch((e) => console.error('[rerun] recommendations failed:', e.message));
+    }
     console.log('[rerun] manual ingest run complete');
     runStatus.finishRun();
   } catch (err) {

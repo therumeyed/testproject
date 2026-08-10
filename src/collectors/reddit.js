@@ -57,7 +57,7 @@ async function collect() {
   const queries = await repo.getActiveQueries('reddit', { maxResults: MAX_QUERIES_PER_RUN });
   const alreadyDoneToday = await repo.countSkippableQueries('reddit');
   runStatus.setStage('reddit', queries.length);
-  if (alreadyDoneToday > 0) runStatus.pushLog(`Reddit: skipping ${alreadyDoneToday} quer(ies) already collected today`);
+  if (alreadyDoneToday > 0) runStatus.pushLog(`Reddit: skipping ${alreadyDoneToday} quer(ies) collected recently`);
   const sampling = await getConfig('comment_sampling');
   let fetched = 0;
   let newCount = 0;
@@ -65,6 +65,7 @@ async function collect() {
 
   try {
     for (const q of queries) {
+      if (runStatus.isStopRequested()) { runStatus.pushLog('Reddit: stopping.'); break; }
       runStatus.tick(q.query_text);
       // Subreddit-monitoring queries get a deeper comment sample (fewer,
       // higher-value sources); keyword search queries get the shallow
