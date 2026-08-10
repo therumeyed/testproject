@@ -3,21 +3,36 @@ const { callClaudeJson, isConfigured } = require('./lib/claude');
 const { getNegativeAndExcludeTerms } = require('./lib/repo');
 const runStatus = require('./lib/runStatus');
 
-// Smaller than it looks: each post in a batch carries caption/hashtags/
-// transcript/comments/metrics, and each resulting cluster in the response
-// carries a full schema (attributes, aliases, conversation themes, etc.) --
-// 25 posts could produce a response that got silently truncated at the old
-// 4096-token cap, which broke JSON.parse ("Unexpected end of JSON input")
-// and skipped clustering for the whole batch. Smaller batch + higher cap
-// below gives real headroom.
-const BATCH_SIZE = 15;
+// Bigger than the old value now that the per-cluster schema is much
+// leaner (no conversation-intelligence fields -- see note below), so a
+// batch's response stays well within budget even with more posts in it.
+const BATCH_SIZE = 30;
+// How many Claude calls run at once. This is the single biggest lever on
+// wall-clock time -- clustering was strictly sequential before (one call,
+// wait, next call), which is the main reason it took ages on a large
+// backlog. Tune via ANTHROPIC_CLUSTER_CONCURRENCY if needed.
+const CONCURRENCY = Number(process.env.ANTHROPIC_CLUSTER_CONCURRENCY) || 4;
+// How many unclustered posts to pull from the DB per outer round (split
+// into BATCH_SIZE-sized chunks and run CONCURRENCY at a time).
+const CHUNK_FETCH_SIZE = 300;
+// Optional cheaper/faster model just for the matching pass -- categorising
+// a post against a known trend list needs far less reasoning than writing
+// social/buying copy, so this is a reasonable place to trade some judgment
+// for speed/cost if you want to. Unset by default (uses the same model as
+// everything else); set e.g. to a Haiku model id to opt in.
+const CLUSTER_MODEL = process.env.ANTHROPIC_CLUSTER_MODEL || undefined;
+
+const MIN_ALIAS_MATCH_LENGTH = 4; // avoid ultra-short aliases causing false-positive substring matches
+
 const PARENT_CATEGORIES = ['beauty_tools_accessories', 'cosmetics', 'beauty_gift_packs'];
 const BRAND_FITS = ['core', 'adjacent', 'content_only', 'out_of_scope'];
 
 // Required output schema per requirements section 13, extended with
 // existingTrendId (lets Claude attach evidence to an already-canonical
 // trend instead of minting a near-duplicate) and confidence retained from
-// the spec's own schema.
+// the spec's own schema. Conversation-intelligence fields (themes,
+// questions, purchase signals, barriers) are deliberately NOT requested
+// here anymore -- see the comment above upsertCluster().
 function validateClusterResponse(parsed) {
   if (!parsed || typeof parsed !== 'object') return 'response must be a JSON object';
   if (!Array.isArray(parsed.clusters)) return 'missing "clusters" array';
@@ -50,6 +65,14 @@ async function fetchUnclusteredPosts(limit) {
   return res.rows;
 }
 
+async function countUnclusteredPosts() {
+  const res = await pool.query(
+    `SELECT count(*)::int AS n FROM social_posts sp
+     WHERE sp.is_relevant IS NULL AND NOT EXISTS (SELECT 1 FROM trend_post_matches tpm WHERE tpm.post_id = sp.id)`
+  );
+  return res.rows[0]?.n || 0;
+}
+
 async function fetchTopComments(postIds) {
   if (postIds.length === 0) return new Map();
   const res = await pool.query(
@@ -80,6 +103,48 @@ async function fetchExistingTrends() {
      ORDER BY t.id`
   );
   return res.rows;
+}
+
+// Deterministic, zero-cost pass that runs BEFORE any Claude call: most new
+// posts about an already-known trend are obviously about it (the caption
+// or a hashtag literally contains the trend's name or an alias), and don't
+// need an LLM's judgment to place. Only posts that don't match anything
+// known go on to the (slower, costlier) Claude clustering pass below.
+// Longest-term-first matching avoids a short, generic alias grabbing a
+// post that actually matches a more specific one.
+async function preMatchByAlias() {
+  const trends = await fetchExistingTrends();
+  if (trends.length === 0) return 0;
+
+  const terms = [];
+  for (const t of trends) {
+    if (t.name) terms.push({ trendId: t.id, term: t.name.toLowerCase() });
+    for (const alias of t.aliases || []) terms.push({ trendId: t.id, term: alias.toLowerCase() });
+  }
+  const usableTerms = terms.filter((t) => t.term.length >= MIN_ALIAS_MATCH_LENGTH);
+  usableTerms.sort((a, b) => b.term.length - a.term.length);
+  if (usableTerms.length === 0) return 0;
+
+  const posts = await fetchUnclusteredPosts(5000);
+  let matched = 0;
+
+  for (const post of posts) {
+    const haystack = `${post.caption || ''} ${post.transcript || ''} ${(post.hashtags || []).join(' ')}`.toLowerCase();
+    if (!haystack.trim()) continue;
+    const hit = usableTerms.find((t) => haystack.includes(t.term));
+    if (!hit) continue;
+
+    await pool.query(
+      `INSERT INTO trend_post_matches (trend_topic_id, post_id, match_confidence) VALUES ($1,$2,0.6)
+       ON CONFLICT (trend_topic_id, post_id) WHERE post_id IS NOT NULL DO NOTHING`,
+      [hit.trendId, post.id]
+    );
+    await pool.query(`UPDATE social_posts SET is_relevant = true WHERE id = $1`, [post.id]);
+    await pool.query(`UPDATE trend_topics SET last_active_date = CURRENT_DATE, updated_at = now() WHERE id = $1`, [hit.trendId]);
+    matched++;
+  }
+
+  return matched;
 }
 
 function buildSystemPrompt(excludeTerms) {
@@ -135,10 +200,6 @@ Return a JSON object exactly matching this shape:
       "brandFit": "core | adjacent | content_only | out_of_scope",
       "socialUse": true,
       "buyingUse": true,
-      "conversationThemes": [],
-      "questions": [],
-      "purchaseSignals": [],
-      "barriers": [],
       "evidencePostIds": [/* post ids from above, integers */],
       "confidence": 0.0
     }
@@ -147,6 +208,13 @@ Return a JSON object exactly matching this shape:
 }`;
 }
 
+// Conversation intelligence (themes/questions/purchase signals/barriers) is
+// no longer generated here. It used to be requested on every single
+// clustering batch call, which meant it was redundantly regenerated many
+// times over for the same trend as new evidence trickled in across
+// batches -- wasted spend for no real benefit. It's now generated once per
+// trend per run, grounded in that trend's full evidence, as part of
+// recommend.js's existing per-trend call instead.
 async function upsertCluster(cluster) {
   const isNewTrend = !cluster.existingTrendId;
   const status = cluster.brandFit === 'out_of_scope' ? 'suppressed' : 'active';
@@ -187,18 +255,6 @@ async function upsertCluster(cluster) {
     await pool.query(`UPDATE social_posts SET is_relevant = true WHERE id = $1`, [postId]);
   }
 
-  await pool.query(
-    `INSERT INTO trend_recommendations (trend_topic_id, rec_type, payload)
-     VALUES ($1, 'conversation_summary', $2)`,
-    [trendId, JSON.stringify({
-      conversationThemes: cluster.conversationThemes || [],
-      questions: cluster.questions || [],
-      purchaseSignals: cluster.purchaseSignals || [],
-      barriers: cluster.barriers || [],
-      confidence: cluster.confidence
-    })]
-  );
-
   return trendId;
 }
 
@@ -213,14 +269,15 @@ async function clusterSubBatch(subBatch, commentsByPost, excludeTerms) {
   // stop -- don't fire off another Claude call once that's happened.
   if (runStatus.isStopRequested()) return 0;
 
-  const existingTrends = await fetchExistingTrends(); // refetch so later splits see trends created by earlier ones
+  const existingTrends = await fetchExistingTrends(); // refetch so later splits/batches see trends created by earlier ones
   let response;
   try {
     response = await callClaudeJson({
       system: buildSystemPrompt(excludeTerms),
       prompt: buildUserPrompt(subBatch, commentsByPost, existingTrends),
-      maxTokens: 8192,
-      validate: validateClusterResponse
+      maxTokens: 4096,
+      validate: validateClusterResponse,
+      model: CLUSTER_MODEL
     });
   } catch (err) {
     if (err.isRateLimit) {
@@ -262,35 +319,66 @@ async function clusterSubBatch(subBatch, commentsByPost, excludeTerms) {
   return clusteredCount;
 }
 
+// Runs `worker` over `items` with at most `limit` in flight at once --
+// clustering used to process one batch at a time, waiting for each Claude
+// call to finish before starting the next, which was the single biggest
+// contributor to it "taking ages" on a large backlog.
+async function runWithConcurrency(items, limit, worker) {
+  const results = new Array(items.length);
+  let next = 0;
+  async function runNext() {
+    while (next < items.length) {
+      if (runStatus.isStopRequested()) return;
+      const i = next++;
+      results[i] = await worker(items[i]);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, runNext));
+  return results;
+}
+
 async function runClustering() {
   if (!isConfigured()) {
     console.log('[cluster] skipped: ANTHROPIC_API_KEY not set');
     return { clustered: 0, skipped: true };
   }
 
-  const { rows: countRows } = await pool.query(
-    `SELECT count(*)::int AS n FROM social_posts sp
-     WHERE sp.is_relevant IS NULL AND NOT EXISTS (SELECT 1 FROM trend_post_matches tpm WHERE tpm.post_id = sp.id)`
-  );
-  runStatus.setStage('clustering', countRows[0]?.n || 0);
-
-  let totalClustered = 0;
-  let batch = await fetchUnclusteredPosts(BATCH_SIZE);
-
-  while (batch.length > 0) {
-    if (runStatus.isStopRequested()) { runStatus.pushLog('Clustering: stopping.'); break; }
-    const commentsByPost = await fetchTopComments(batch.map((p) => p.id));
-    const excludeTerms = await getNegativeAndExcludeTerms();
-
-    totalClustered += await clusterSubBatch(batch, commentsByPost, excludeTerms);
-    runStatus.tick(`processed ${batch.length} post(s)`, batch.length);
-
-    batch = await fetchUnclusteredPosts(BATCH_SIZE);
+  const preMatched = await preMatchByAlias();
+  if (preMatched > 0) {
+    console.log(`[cluster] alias pre-match assigned ${preMatched} post(s) without using Claude`);
+    runStatus.pushLog(`Alias pre-match: assigned ${preMatched} post(s) to existing trends without using Claude`);
   }
 
-  console.log(`[cluster] clustered ${totalClustered} posts into trends`);
-  runStatus.pushLog(`Clustering done: ${totalClustered} post(s) clustered`);
-  return { clustered: totalClustered, skipped: false };
+  const remaining = await countUnclusteredPosts();
+  runStatus.setStage('clustering', remaining);
+
+  let totalClustered = 0;
+  let posts = await fetchUnclusteredPosts(CHUNK_FETCH_SIZE);
+
+  while (posts.length > 0) {
+    if (runStatus.isStopRequested()) { runStatus.pushLog('Clustering: stopping.'); break; }
+
+    const commentsByPost = await fetchTopComments(posts.map((p) => p.id));
+    const excludeTerms = await getNegativeAndExcludeTerms();
+
+    const batches = [];
+    for (let i = 0; i < posts.length; i += BATCH_SIZE) batches.push(posts.slice(i, i + BATCH_SIZE));
+
+    const results = await runWithConcurrency(batches, CONCURRENCY, async (batch) => {
+      const n = await clusterSubBatch(batch, commentsByPost, excludeTerms);
+      runStatus.tick(`processed ${batch.length} post(s)`, batch.length);
+      return n;
+    });
+    totalClustered += results.reduce((a, b) => a + (b || 0), 0);
+
+    if (runStatus.isStopRequested()) break;
+    posts = await fetchUnclusteredPosts(CHUNK_FETCH_SIZE);
+  }
+
+  const grandTotal = totalClustered + preMatched;
+  console.log(`[cluster] clustered ${grandTotal} posts into trends (${preMatched} via alias match, ${totalClustered} via Claude)`);
+  runStatus.pushLog(`Clustering done: ${grandTotal} post(s) clustered (${preMatched} via alias match, ${totalClustered} via Claude)`);
+  return { clustered: grandTotal, skipped: false };
 }
 
 module.exports = { runClustering };

@@ -2,35 +2,23 @@ const { pool } = require('./db');
 const { callClaudeJson, isConfigured } = require('./lib/claude');
 const runStatus = require('./lib/runStatus');
 
-// Generates the two client-facing, evidence-grounded outputs: a Sportsgirl
-// social content idea (section 9.3) and a buying recommendation (section
-// 9.4). Only generated once per trend per rec_type -- regenerating on every
-// run would both waste spend and stomp on a user's workflow status/notes.
-// Feeding published performance / buyer decisions back in to *improve*
-// future generations is Phase 3 (out of scope for this MVP pass).
+// Generates three client-facing, evidence-grounded outputs per trend in a
+// single Claude call: conversation intelligence (themes/questions/purchase
+// signals/barriers -- section 8), a Sportsgirl social content idea
+// (section 9.3), and a buying recommendation (section 9.4). Conversation
+// intelligence used to be generated separately inside cluster.js, once per
+// clustering BATCH -- since a trend accumulates evidence across many
+// batches over time, that meant redundantly regenerating it many times
+// over for the same trend. Doing it once here, per trend, per run, grounded
+// in that trend's accumulated evidence, is both cheaper and more coherent.
+// Only generated once per trend -- regenerating on every run would both
+// waste spend and stomp on a user's workflow status/notes. Feeding
+// published performance / buyer decisions back in to *improve* future
+// generations is Phase 3 (out of scope for this MVP pass).
 
-async function fetchConversationSummary(trendId) {
+async function fetchTopEvidence(trendId, limit = 8) {
   const { rows } = await pool.query(
-    `SELECT payload FROM trend_recommendations WHERE trend_topic_id = $1 AND rec_type = 'conversation_summary'
-     ORDER BY created_at DESC LIMIT 3`,
-    [trendId]
-  );
-  const themes = new Set(), questions = new Set(), purchaseSignals = new Set(), barriers = new Set();
-  for (const r of rows) {
-    (r.payload.conversationThemes || []).forEach((t) => themes.add(t));
-    (r.payload.questions || []).forEach((t) => questions.add(t));
-    (r.payload.purchaseSignals || []).forEach((t) => purchaseSignals.add(t));
-    (r.payload.barriers || []).forEach((t) => barriers.add(t));
-  }
-  return {
-    conversationThemes: [...themes], questions: [...questions],
-    purchaseSignals: [...purchaseSignals], barriers: [...barriers]
-  };
-}
-
-async function fetchTopEvidence(trendId, limit = 6) {
-  const { rows } = await pool.query(
-    `SELECT sp.platform, sp.url, sp.caption, sp.publish_ts, c.handle,
+    `SELECT sp.id, sp.platform, sp.url, sp.caption, sp.publish_ts, c.handle,
             pms.play_count, pms.like_count, pms.comment_count
      FROM trend_post_matches tpm
      JOIN social_posts sp ON sp.id = tpm.post_id
@@ -47,18 +35,31 @@ async function fetchTopEvidence(trendId, limit = 6) {
   return rows;
 }
 
+async function fetchEvidenceComments(postIds) {
+  if (postIds.length === 0) return [];
+  const { rows } = await pool.query(
+    `SELECT body FROM comments
+     WHERE post_id = ANY($1::int[])
+     ORDER BY (contains_purchase_intent::int + contains_question::int) DESC, score DESC NULLS LAST
+     LIMIT 20`,
+    [postIds]
+  );
+  return rows.map((r) => r.body).filter(Boolean);
+}
+
 async function fetchExistingRecTypes(trendId) {
   const { rows } = await pool.query(
-    `SELECT DISTINCT rec_type FROM trend_recommendations WHERE trend_topic_id = $1 AND rec_type IN ('social_idea', 'buying_opportunity')`,
+    `SELECT DISTINCT rec_type FROM trend_recommendations WHERE trend_topic_id = $1 AND rec_type IN ('social_idea', 'buying_opportunity', 'conversation_summary')`,
     [trendId]
   );
   return new Set(rows.map((r) => r.rec_type));
 }
 
-function buildPrompt(trend, latestScore, conversation, evidence) {
+function buildPrompt(trend, latestScore, evidence, comments) {
   const evidenceLines = evidence.map((e) =>
     `- [${e.platform}] by ${e.handle || 'unknown creator'}: "${(e.caption || '').slice(0, 150)}" (plays=${e.play_count ?? 'n/a'}, likes=${e.like_count ?? 'n/a'}, comments=${e.comment_count ?? 'n/a'}) ${e.url || ''}`
   ).join('\n');
+  const commentLines = comments.length ? comments.map((c) => `"${c.slice(0, 200)}"`).join('\n') : 'none sampled';
 
   return `TREND: "${trend.name}"
 Definition: ${trend.definition || 'n/a'}
@@ -70,18 +71,28 @@ Trend age: ${latestScore.trend_age_days} days, active ${latestScore.active_days}
 Social Opportunity Score: ${latestScore.social_score}/100, Buying Opportunity Score: ${latestScore.buying_score}/100, Confidence: ${latestScore.confidence_score}/100
 Australian validation: ${trend.market_au_state}
 
-CONVERSATION THEMES: ${conversation.conversationThemes.join('; ') || 'none extracted yet'}
-QUESTIONS PEOPLE ASK: ${conversation.questions.join('; ') || 'none'}
-PURCHASE SIGNALS: ${conversation.purchaseSignals.join('; ') || 'none'}
-BARRIERS/OBJECTIONS: ${conversation.barriers.join('; ') || 'none'}
-
 TOP EVIDENCE POSTS:
 ${evidenceLines || 'none'}
 
-Using ONLY the evidence above, produce a Sportsgirl-specific social content idea and buying recommendation. Sportsgirl is an Australian mass-market fashion/accessories retailer -- keep ideas affordable and on-brand, not luxury. Do NOT copy a creator's post; use the trend pattern to propose an original Sportsgirl execution. If evidence is too thin for a confident recommendation, say so explicitly in the relevant field rather than inventing detail.
+SAMPLE COMMENTS (from the evidence above):
+${commentLines}
+
+Using ONLY the evidence above:
+1. Summarise what people are actually saying (conversation intelligence).
+2. Produce a Sportsgirl-specific social content idea.
+3. Produce a Sportsgirl-specific buying recommendation.
+
+Sportsgirl is an Australian mass-market fashion/accessories retailer -- keep ideas affordable and on-brand, not luxury. Do NOT copy a creator's post; use the trend pattern to propose an original Sportsgirl execution. If evidence is too thin for a confident recommendation, say so explicitly in the relevant field rather than inventing detail.
 
 Return ONLY this JSON object:
 {
+  "conversationSummary": {
+    "conversationThemes": ["string -- main reasons people like/share this"],
+    "questions": ["string -- common questions people ask"],
+    "purchaseSignals": ["string -- product requests / purchase-intent statements"],
+    "barriers": ["string -- objections, complaints, hesitations"],
+    "confidence": 0.0
+  },
   "socialIdea": {
     "title": "string",
     "format": "TikTok/Reel | carousel | story | tutorial | GRWM | product demo | trend recreation | comparison | creator collaboration",
@@ -115,7 +126,9 @@ If the trend is not suitable for social (evidence too weak / off-brand), set "so
 
 function validateRecResponse(parsed) {
   if (!parsed || typeof parsed !== 'object') return 'response must be a JSON object';
-  if (!('socialIdea' in parsed) || !('buyingOpportunity' in parsed)) return 'missing socialIdea/buyingOpportunity keys';
+  if (!('socialIdea' in parsed) || !('buyingOpportunity' in parsed) || !('conversationSummary' in parsed)) {
+    return 'missing conversationSummary/socialIdea/buyingOpportunity keys';
+  }
   if (parsed.socialIdea && !parsed.socialIdea.title) return 'socialIdea missing title';
   if (parsed.buyingOpportunity && !parsed.buyingOpportunity.productOpportunity) return 'buyingOpportunity missing productOpportunity';
   return null;
@@ -123,19 +136,26 @@ function validateRecResponse(parsed) {
 
 async function generateForTrend(trend, latestScore) {
   const existingTypes = await fetchExistingRecTypes(trend.id);
-  if (existingTypes.has('social_idea') && existingTypes.has('buying_opportunity')) return { generated: false };
+  if (existingTypes.has('social_idea') && existingTypes.has('buying_opportunity') && existingTypes.has('conversation_summary')) {
+    return { generated: false };
+  }
 
-  const [conversation, evidence] = await Promise.all([
-    fetchConversationSummary(trend.id), fetchTopEvidence(trend.id)
-  ]);
+  const evidence = await fetchTopEvidence(trend.id);
+  const comments = await fetchEvidenceComments(evidence.map((e) => e.id));
 
   const response = await callClaudeJson({
-    system: 'You are the social + buying recommendation engine for Sportsgirl Beauty Radar. Ground every claim in the supplied evidence; never invent facts.',
-    prompt: buildPrompt(trend, latestScore, conversation, evidence),
-    maxTokens: 2048,
+    system: 'You are the conversation-intelligence and recommendation engine for Sportsgirl Beauty Radar. Ground every claim in the supplied evidence; never invent facts.',
+    prompt: buildPrompt(trend, latestScore, evidence, comments),
+    maxTokens: 3072,
     validate: validateRecResponse
   });
 
+  if (response.conversationSummary && !existingTypes.has('conversation_summary')) {
+    await pool.query(
+      `INSERT INTO trend_recommendations (trend_topic_id, rec_type, payload) VALUES ($1, 'conversation_summary', $2)`,
+      [trend.id, JSON.stringify(response.conversationSummary)]
+    );
+  }
   if (response.socialIdea && trend.social_use && !existingTypes.has('social_idea')) {
     await pool.query(
       `INSERT INTO trend_recommendations (trend_topic_id, rec_type, payload, status) VALUES ($1, 'social_idea', $2, 'new')`,

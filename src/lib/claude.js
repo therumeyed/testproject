@@ -5,7 +5,7 @@ function isConfigured() {
   return Boolean(process.env.ANTHROPIC_API_KEY);
 }
 
-async function callClaude({ system, prompt, maxTokens = 4096 }) {
+async function callClaude({ system, prompt, maxTokens = 4096, model }) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY not set');
 
@@ -17,7 +17,7 @@ async function callClaude({ system, prompt, maxTokens = 4096 }) {
       'anthropic-version': '2023-06-01'
     },
     body: JSON.stringify({
-      model: MODEL,
+      model: model || MODEL,
       max_tokens: maxTokens,
       system,
       messages: [{ role: 'user', content: prompt }]
@@ -51,12 +51,12 @@ function extractJson(text) {
 // the caller's validate() function. Retries with the validation error fed
 // back to the model rather than silently accepting malformed output --
 // required by section 13 ("Reject or retry invalid JSON").
-async function callClaudeJson({ system, prompt, maxTokens = 4096, validate, maxRetries = 2 }) {
+async function callClaudeJson({ system, prompt, maxTokens = 4096, validate, maxRetries = 2, model }) {
   let lastError;
   let currentPrompt = prompt;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
-      const text = await callClaude({ system, prompt: currentPrompt, maxTokens });
+      const text = await callClaude({ system, prompt: currentPrompt, maxTokens, model });
       const parsed = extractJson(text);
       if (validate) {
         const validationError = validate(parsed);
