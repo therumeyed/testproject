@@ -2,6 +2,16 @@ const { pool } = require('./db');
 const { callClaudeJson, isConfigured } = require('./lib/claude');
 const runStatus = require('./lib/runStatus');
 
+// The newest Sonnet generation (ANTHROPIC_MODEL default) rejects
+// temperature control outright (400 "temperature is deprecated for this
+// model" -- confirmed live), which reintroduces an intermittent 0-char
+// empty-response failure this call can't fully retry its way out of.
+// Pinning recommendations to this older generation, which still honours
+// temperature: 0, trades a little writing/reasoning polish for
+// eliminating that failure mode entirely. Override via env if a future
+// model needs a different pin.
+const RECOMMEND_MODEL = process.env.ANTHROPIC_RECOMMEND_MODEL || 'claude-sonnet-4-5-20250929';
+
 // Generates three client-facing, evidence-grounded outputs per trend in a
 // single Claude call: conversation intelligence (themes/questions/purchase
 // signals/barriers -- section 8), a Sportsgirl social content idea
@@ -148,12 +158,15 @@ async function generateForTrend(trend, latestScore) {
     prompt: buildPrompt(trend, latestScore, evidence, comments),
     maxTokens: 3072,
     validate: validateRecResponse,
+    model: RECOMMEND_MODEL,
     // Same fix as cluster.js's classifyPhrase: at default temperature the
     // model occasionally lands its first sampled token on a stop token,
     // producing a genuine 0-char response (stop_reason=end_turn, not
     // max_tokens truncation). Each trend only gets ONE recommendation here
     // (not several variants to pick from), so there's no real use for
-    // sampling randomness to trade away for that reliability.
+    // sampling randomness to trade away for that reliability. Requires
+    // RECOMMEND_MODEL above -- the default ANTHROPIC_MODEL rejects this
+    // parameter outright.
     temperature: 0
   });
 
