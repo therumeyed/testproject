@@ -276,7 +276,13 @@ async function classifyPost(post, commentsByPost, existingTrendsRef, excludeTerm
       prompt: buildSinglePostPrompt(post, comments, existingTrendsRef),
       maxTokens: 2048, // a single classification decision is small -- generous headroom, not a guess made under pressure
       validate: validateClassification,
-      model: CLUSTER_MODEL
+      model: CLUSTER_MODEL,
+      // This is a structured classification decision, not creative writing --
+      // at default temperature the model occasionally lands its very first
+      // sampled token on a stop token, producing a genuine 0-char response
+      // (stop_reason=end_turn, not max_tokens truncation). temperature: 0
+      // makes the highest-probability token dominate, eliminating that.
+      temperature: 0
     });
   } catch (err) {
     if (err.isRateLimit) {
