@@ -275,7 +275,13 @@ async function clusterSubBatch(subBatch, commentsByPost, excludeTerms) {
     response = await callClaudeJson({
       system: buildSystemPrompt(excludeTerms),
       prompt: buildUserPrompt(subBatch, commentsByPost, existingTrends),
-      maxTokens: 4096,
+      // What actually drives response size is how many DISTINCT trends a
+      // batch maps to, not the schema weight -- a batch of 30 genuinely
+      // novel posts can still produce 15-20 separate cluster objects, and
+      // that blows past a smaller cap regardless of how lean each one is.
+      // Learned this the hard way by lowering it after the last schema
+      // simplification; putting the headroom back.
+      maxTokens: 8192,
       validate: validateClusterResponse,
       model: CLUSTER_MODEL
     });
