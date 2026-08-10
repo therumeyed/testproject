@@ -202,6 +202,51 @@ async function upsertCluster(cluster) {
   return trendId;
 }
 
+// Attempts to cluster a batch of posts; if Claude's response gets truncated
+// (whatever the batch size, some content mixes just need more output than
+// others -- a fixed batch size is always going to be wrong for some batch)
+// it splits the batch in half and retries each half, recursively, instead
+// of abandoning the whole batch. Bottoms out at a single post: if that
+// still fails, only that one post is left unclustered for a future run.
+async function clusterSubBatch(subBatch, commentsByPost, excludeTerms) {
+  const existingTrends = await fetchExistingTrends(); // refetch so later splits see trends created by earlier ones
+  let response;
+  try {
+    response = await callClaudeJson({
+      system: buildSystemPrompt(excludeTerms),
+      prompt: buildUserPrompt(subBatch, commentsByPost, existingTrends),
+      maxTokens: 8192,
+      validate: validateClusterResponse
+    });
+  } catch (err) {
+    if (subBatch.length > 1) {
+      const mid = Math.ceil(subBatch.length / 2);
+      runStatus.pushLog(`Clustering batch of ${subBatch.length} failed (${err.message}) -- splitting into ${mid} + ${subBatch.length - mid} and retrying`);
+      const a = await clusterSubBatch(subBatch.slice(0, mid), commentsByPost, excludeTerms);
+      const b = await clusterSubBatch(subBatch.slice(mid), commentsByPost, excludeTerms);
+      return a + b;
+    }
+    console.error(`[cluster] post ${subBatch[0]?.id} failed after retries:`, err.message);
+    runStatus.pushLog(`Clustering post ${subBatch[0]?.id} failed, leaving for next run: ${err.message}`);
+    return 0;
+  }
+
+  let clusteredCount = 0;
+  for (const cluster of response.clusters) {
+    await upsertCluster(cluster);
+    clusteredCount += cluster.evidencePostIds.length;
+    runStatus.pushLog(`Clustered "${cluster.canonicalTrendName}" (${cluster.evidencePostIds.length} post(s))`);
+  }
+
+  const clusteredIds = new Set(response.clusters.flatMap((c) => c.evidencePostIds));
+  const leftoverIds = subBatch.map((p) => p.id).filter((id) => !clusteredIds.has(id));
+  if (leftoverIds.length > 0) {
+    await pool.query(`UPDATE social_posts SET is_relevant = false WHERE id = ANY($1::int[])`, [leftoverIds]);
+  }
+
+  return clusteredCount;
+}
+
 async function runClustering() {
   if (!isConfigured()) {
     console.log('[cluster] skipped: ANTHROPIC_API_KEY not set');
@@ -219,35 +264,10 @@ async function runClustering() {
 
   while (batch.length > 0) {
     const commentsByPost = await fetchTopComments(batch.map((p) => p.id));
-    const existingTrends = await fetchExistingTrends();
     const excludeTerms = await getNegativeAndExcludeTerms();
 
-    let response;
-    try {
-      response = await callClaudeJson({
-        system: buildSystemPrompt(excludeTerms),
-        prompt: buildUserPrompt(batch, commentsByPost, existingTrends),
-        maxTokens: 8192,
-        validate: validateClusterResponse
-      });
-    } catch (err) {
-      console.error('[cluster] batch failed after retries:', err.message);
-      runStatus.pushLog(`Clustering batch failed: ${err.message}`);
-      break; // leave this batch unclustered for the next run rather than looping forever
-    }
-
-    for (const cluster of response.clusters) {
-      await upsertCluster(cluster);
-      totalClustered += cluster.evidencePostIds.length;
-      runStatus.pushLog(`Clustered "${cluster.canonicalTrendName}" (${cluster.evidencePostIds.length} post(s))`);
-    }
+    totalClustered += await clusterSubBatch(batch, commentsByPost, excludeTerms);
     runStatus.tick(`processed ${batch.length} post(s)`, batch.length);
-
-    const clusteredIds = new Set(response.clusters.flatMap((c) => c.evidencePostIds));
-    const leftoverIds = batch.map((p) => p.id).filter((id) => !clusteredIds.has(id));
-    if (leftoverIds.length > 0) {
-      await pool.query(`UPDATE social_posts SET is_relevant = false WHERE id = ANY($1::int[])`, [leftoverIds]);
-    }
 
     batch = await fetchUnclusteredPosts(BATCH_SIZE);
   }
