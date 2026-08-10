@@ -113,6 +113,12 @@ async function collectOne(trend, geo) {
   return fetched;
 }
 
+// If Google is blocking this IP, EVERY lookup fails with 429 -- there's no
+// point grinding through the entire trend list (each with an 800ms pause)
+// just to log the same failure dozens of times. After this many CONSECUTIVE
+// 429s, treat it as "blocked for this run" and stop early instead.
+const CONSECUTIVE_429_CIRCUIT_BREAKER = 3;
+
 // Runs per CANONICAL TREND (not per seed keyword) -- Google Trends
 // validation only makes sense once clustering (cluster.js) has produced a
 // specific trend name to search for. Called after clustering in ingest.js.
@@ -123,28 +129,44 @@ async function collectForActiveTrends() {
 
   let fetched = 0;
   let failures = 0;
+  let consecutive429s = 0;
+  let blocked = false;
   try {
     for (const trend of trends) {
       if (runStatus.isStopRequested()) { runStatus.pushLog('Google Trends: stopping.'); break; }
+      if (blocked) break;
       runStatus.tick(trend.name);
       for (const geo of ['', 'AU']) {
         try {
           fetched += await collectOne(trend, geo);
+          consecutive429s = 0;
         } catch (err) {
           failures++;
           console.error(`[google_trends] "${trend.name}" (${geo || 'GLOBAL'}) failed:`, err.message);
           runStatus.pushLog(`google_trends "${trend.name}" (${geo || 'GLOBAL'}) failed: ${err.message}`);
+          if (err.message.includes('429')) {
+            consecutive429s++;
+            if (consecutive429s >= CONSECUTIVE_429_CIRCUIT_BREAKER) {
+              blocked = true;
+              runStatus.pushLog(`Google Trends: ${consecutive429s} consecutive 429s -- this IP is blocked, stopping early instead of retrying every trend.`);
+              break;
+            }
+          } else {
+            consecutive429s = 0;
+          }
         }
         await sleep(800); // light pacing -- this is an unofficial endpoint, not a paid API with a documented rate limit
       }
     }
 
-    const status = failures === 0 ? 'success' : (fetched > 0 ? 'partial' : 'error');
+    const status = blocked ? 'error' : (failures === 0 ? 'success' : (fetched > 0 ? 'partial' : 'error'));
     await repo.finishSourceRun(runId, {
       status, itemsFetched: fetched, itemsNew: fetched,
-      errorMessage: failures > 0 ? `${failures} of ${trends.length * 2} trend/geo lookups failed -- see logs (likely 429s if this is new)` : null
+      errorMessage: blocked
+        ? 'stopped early: this IP appears blocked by Google Trends (repeated 429s)'
+        : (failures > 0 ? `${failures} of ${trends.length * 2} trend/geo lookups failed -- see logs (likely 429s if this is new)` : null)
     });
-    runStatus.pushLog(`Google Trends done: ${fetched} data point(s), ${failures} failure(s)`);
+    runStatus.pushLog(`Google Trends done: ${fetched} data point(s), ${failures} failure(s)${blocked ? ' (stopped early -- IP blocked)' : ''}`);
   } catch (err) {
     await repo.finishSourceRun(runId, { status: 'error', itemsFetched: fetched, errorMessage: err.message });
     throw err;
