@@ -177,6 +177,12 @@ async function runRecommendations() {
       const result = await generateForTrend(trend, trend);
       if (result.generated) generated++;
     } catch (err) {
+      if (err.isRateLimit) {
+        console.error('[recommend] Anthropic rate/usage limit hit -- stopping recommendations for this run.');
+        runStatus.pushLog(`Anthropic rate/usage limit hit -- stopping recommendations (${err.message})`);
+        runStatus.requestStop();
+        break;
+      }
       console.error(`[recommend] trend ${trend.id} ("${trend.name}") failed:`, err.message);
       runStatus.pushLog(`Recommendation for "${trend.name}" failed: ${err.message}`);
     }

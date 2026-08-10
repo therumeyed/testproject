@@ -23,7 +23,17 @@ async function callClaude({ system, prompt, maxTokens = 4096 }) {
       messages: [{ role: 'user', content: prompt }]
     })
   });
-  if (!res.ok) throw new Error(`Anthropic call failed: ${res.status} ${await res.text()}`);
+  if (!res.ok) {
+    const body = await res.text();
+    const err = new Error(`Anthropic call failed: ${res.status} ${body}`);
+    // 429 covers both short-lived rate limiting AND hard usage/spend limits
+    // (e.g. "usage limit exceeded") -- neither recovers by immediately
+    // retrying the same request, unlike a malformed-JSON response. Callers
+    // use this to stop outright instead of retrying/splitting into more
+    // doomed requests against an already-exhausted limit.
+    err.isRateLimit = res.status === 429;
+    throw err;
+  }
   const data = await res.json();
   return data.content?.[0]?.text || '';
 }
@@ -54,6 +64,7 @@ async function callClaudeJson({ system, prompt, maxTokens = 4096, validate, maxR
       }
       return parsed;
     } catch (err) {
+      if (err.isRateLimit) throw err; // don't retry into an already-exhausted limit
       lastError = err;
       currentPrompt = `${prompt}\n\nYour previous response was invalid: ${err.message}\nReturn ONLY valid JSON matching the required schema, no other text.`;
     }

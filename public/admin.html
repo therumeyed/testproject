@@ -12,6 +12,7 @@
     <div><h1>Admin / Tracking Settings</h1><p class="subtitle">Taxonomy, thresholds, sources and governance.</p></div>
     <div style="display:flex;gap:8px;">
       <button id="rerun">Run collection now</button>
+      <button id="clusterOnly" class="secondary" title="Skips TikTok/Instagram/Reddit and goes straight to clustering existing evidence -- use this to resume after a Claude-side failure without re-collecting.">Cluster &amp; score existing data</button>
       <button id="stopRun" class="secondary" style="display:none;background:var(--bad-soft);color:var(--bad);border-color:var(--bad);">Stop run</button>
     </div>
   </div>
@@ -185,6 +186,7 @@ function renderRunStatus(s) {
 
   document.getElementById('rerun').disabled = s.running;
   document.getElementById('rerun').textContent = s.running ? 'Run in progress…' : 'Run collection now';
+  document.getElementById('clusterOnly').disabled = s.running;
   document.getElementById('stopRun').style.display = s.running ? 'inline-block' : 'none';
   document.getElementById('stopRun').disabled = s.stopRequested;
   document.getElementById('stopRun').textContent = s.stopRequested ? 'Stopping…' : 'Stop run';
@@ -237,6 +239,15 @@ async function pollRunStatus() {
 
   document.getElementById('stopRun').addEventListener('click', async () => {
     await api('/api/admin/rerun/stop', { method: 'POST' });
+    pollRunStatus();
+  });
+
+  document.getElementById('clusterOnly').addEventListener('click', async () => {
+    try {
+      await api('/api/admin/rerun/cluster-only', { method: 'POST' });
+    } catch (err) {
+      if (!String(err.message).includes('already_running')) throw err;
+    }
     pollRunStatus();
   });
 

@@ -209,6 +209,10 @@ async function upsertCluster(cluster) {
 // of abandoning the whole batch. Bottoms out at a single post: if that
 // still fails, only that one post is left unclustered for a future run.
 async function clusterSubBatch(subBatch, commentsByPost, excludeTerms) {
+  // A prior sibling call (or the Stop button) may have already triggered a
+  // stop -- don't fire off another Claude call once that's happened.
+  if (runStatus.isStopRequested()) return 0;
+
   const existingTrends = await fetchExistingTrends(); // refetch so later splits see trends created by earlier ones
   let response;
   try {
@@ -219,10 +223,21 @@ async function clusterSubBatch(subBatch, commentsByPost, excludeTerms) {
       validate: validateClusterResponse
     });
   } catch (err) {
+    if (err.isRateLimit) {
+      // Splitting and retrying here would just fan out into many more
+      // requests against an already-exhausted rate/usage limit, making it
+      // worse. Stop the whole run cleanly instead -- whatever's left over
+      // just picks up next time once the limit has recovered.
+      console.error('[cluster] Anthropic rate/usage limit hit -- stopping clustering for this run.');
+      runStatus.pushLog(`Anthropic rate/usage limit hit -- stopping clustering (${err.message})`);
+      runStatus.requestStop();
+      return 0;
+    }
     if (subBatch.length > 1) {
       const mid = Math.ceil(subBatch.length / 2);
       runStatus.pushLog(`Clustering batch of ${subBatch.length} failed (${err.message}) -- splitting into ${mid} + ${subBatch.length - mid} and retrying`);
       const a = await clusterSubBatch(subBatch.slice(0, mid), commentsByPost, excludeTerms);
+      if (runStatus.isStopRequested()) return a;
       const b = await clusterSubBatch(subBatch.slice(mid), commentsByPost, excludeTerms);
       return a + b;
     }

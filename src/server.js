@@ -358,44 +358,70 @@ admin.post('/rerun/stop', async (req, res) => {
   res.json({ ok: true });
 });
 
-admin.post('/rerun', async (req, res) => {
-  if (runStatus.getStatus().running) {
-    return res.status(409).json({ error: 'already_running', message: 'A collection run is already in progress.' });
-  }
+async function runPipeline({ skipCollection }) {
+  const tiktok = require('./collectors/tiktok');
+  const instagram = require('./collectors/instagram');
+  const reddit = require('./collectors/reddit');
+  const googleTrends = require('./collectors/googleTrends');
+  const { runClustering } = require('./cluster');
+  const { computeAllDailyMetrics, computeAndStoreScores } = require('./scoring');
+  const { runRecommendations } = require('./recommend');
+  const today = new Date().toISOString().slice(0, 10);
 
-  res.json({ ok: true, message: 'Manual rerun started.' });
-  runStatus.startRun();
-  await writeAudit(req, 'manual_rerun_triggered', 'ingest', null, null, null);
-  try {
-    const tiktok = require('./collectors/tiktok');
-    const instagram = require('./collectors/instagram');
-    const reddit = require('./collectors/reddit');
-    const googleTrends = require('./collectors/googleTrends');
-    const { runClustering } = require('./cluster');
-    const { computeAllDailyMetrics, computeAndStoreScores } = require('./scoring');
-    const { runRecommendations } = require('./recommend');
-    const today = new Date().toISOString().slice(0, 10);
-
-    // Checked between stages too, not just within each one, so a stop
-    // requested near the end of a stage doesn't still kick off the next one.
+  // Checked between stages too, not just within each one, so a stop
+  // requested near the end of a stage doesn't still kick off the next one.
+  if (!skipCollection) {
     for (const collector of [tiktok, instagram, reddit]) {
       if (runStatus.isStopRequested()) break;
       await collector.collect().catch((e) => console.error('[rerun] collector failed:', e.message));
     }
-    if (!runStatus.isStopRequested()) {
-      await runClustering().catch((e) => console.error('[rerun] clustering failed:', e.message));
-    }
-    if (!runStatus.isStopRequested()) {
-      await googleTrends.collectForActiveTrends().catch((e) => console.error('[rerun] google trends failed:', e.message));
-    }
-    if (!runStatus.isStopRequested()) {
-      await computeAllDailyMetrics(today);
-      await computeAndStoreScores(today);
-    }
-    if (!runStatus.isStopRequested()) {
-      await runRecommendations().catch((e) => console.error('[rerun] recommendations failed:', e.message));
-    }
-    console.log('[rerun] manual ingest run complete');
+  }
+  if (!runStatus.isStopRequested()) {
+    await runClustering().catch((e) => console.error('[rerun] clustering failed:', e.message));
+  }
+  if (!runStatus.isStopRequested()) {
+    await googleTrends.collectForActiveTrends().catch((e) => console.error('[rerun] google trends failed:', e.message));
+  }
+  if (!runStatus.isStopRequested()) {
+    await computeAllDailyMetrics(today);
+    await computeAndStoreScores(today);
+  }
+  if (!runStatus.isStopRequested()) {
+    await runRecommendations().catch((e) => console.error('[rerun] recommendations failed:', e.message));
+  }
+  console.log('[rerun] manual pipeline run complete');
+}
+
+admin.post('/rerun', async (req, res) => {
+  if (runStatus.getStatus().running) {
+    return res.status(409).json({ error: 'already_running', message: 'A collection run is already in progress.' });
+  }
+  res.json({ ok: true, message: 'Manual rerun started.' });
+  runStatus.startRun();
+  await writeAudit(req, 'manual_rerun_triggered', 'ingest', null, null, null);
+  try {
+    await runPipeline({ skipCollection: false });
+    runStatus.finishRun();
+  } catch (err) {
+    console.error('[rerun] failed:', err.message);
+    runStatus.finishRun(err);
+  }
+});
+
+// Skips TikTok/Instagram/Reddit collection entirely and goes straight to
+// clustering -> Google Trends -> scoring -> recommendations, for resuming
+// after a Claude-side failure (rate limit, etc.) without waiting through
+// another full collection pass when there's already plenty of uncollected
+// evidence sitting in the database.
+admin.post('/rerun/cluster-only', async (req, res) => {
+  if (runStatus.getStatus().running) {
+    return res.status(409).json({ error: 'already_running', message: 'A collection run is already in progress.' });
+  }
+  res.json({ ok: true, message: 'Clustering-only run started.' });
+  runStatus.startRun();
+  await writeAudit(req, 'manual_cluster_only_triggered', 'ingest', null, null, null);
+  try {
+    await runPipeline({ skipCollection: true });
     runStatus.finishRun();
   } catch (err) {
     console.error('[rerun] failed:', err.message);
