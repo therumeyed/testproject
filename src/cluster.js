@@ -3,19 +3,22 @@ const { callClaudeJson, isConfigured } = require('./lib/claude');
 const { getNegativeAndExcludeTerms } = require('./lib/repo');
 const runStatus = require('./lib/runStatus');
 
-// Kept conservative on purpose: what actually drives response size is how
-// many DISTINCT trends a batch maps to, not the schema weight, and that's
-// genuinely unpredictable per batch (a batch of very novel/diverse posts
-// can still produce far more cluster objects than a batch this size
-// "should" need). 30 truncated repeatedly even at an 8192 token cap; 15 is
-// the size actually proven reliable. Throughput now comes from
-// concurrency, not from pushing batch size up.
-const BATCH_SIZE = 15;
+// Kept deliberately small: both 30 and 15 have truncated in practice, which
+// means guessing a "safe" fixed number isn't working -- what actually
+// drives response size is how many DISTINCT trends a batch maps to, and
+// that's been consistently harder to predict than expected. Going smaller
+// as a defensive measure while claude.js's stop_reason diagnostics (see
+// that file) reveal whether this is really still a token-budget problem or
+// something else -- check the run log's failure messages after this
+// deploys: "hit max_tokens" confirms truncation; anything else means the
+// real cause is elsewhere and batch size was never it. Throughput is made
+// up for via concurrency instead of batch size.
+const BATCH_SIZE = 8;
 // How many Claude calls run at once. This is the single biggest lever on
 // wall-clock time -- clustering was strictly sequential before (one call,
 // wait, next call), which is the main reason it took ages on a large
 // backlog. Tune via ANTHROPIC_CLUSTER_CONCURRENCY if needed.
-const CONCURRENCY = Number(process.env.ANTHROPIC_CLUSTER_CONCURRENCY) || 6;
+const CONCURRENCY = Number(process.env.ANTHROPIC_CLUSTER_CONCURRENCY) || 8;
 // How many unclustered posts to pull from the DB per outer round (split
 // into BATCH_SIZE-sized chunks and run CONCURRENCY at a time).
 const CHUNK_FETCH_SIZE = 300;

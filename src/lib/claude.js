@@ -35,7 +35,7 @@ async function callClaude({ system, prompt, maxTokens = 4096, model }) {
     throw err;
   }
   const data = await res.json();
-  return data.content?.[0]?.text || '';
+  return { text: data.content?.[0]?.text || '', stopReason: data.stop_reason };
 }
 
 function extractJson(text) {
@@ -55,8 +55,10 @@ async function callClaudeJson({ system, prompt, maxTokens = 4096, validate, maxR
   let lastError;
   let currentPrompt = prompt;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    let text = '';
+    let stopReason;
     try {
-      const text = await callClaude({ system, prompt: currentPrompt, maxTokens, model });
+      ({ text, stopReason } = await callClaude({ system, prompt: currentPrompt, maxTokens, model }));
       const parsed = extractJson(text);
       if (validate) {
         const validationError = validate(parsed);
@@ -65,7 +67,17 @@ async function callClaudeJson({ system, prompt, maxTokens = 4096, validate, maxR
       return parsed;
     } catch (err) {
       if (err.isRateLimit) throw err; // don't retry into an already-exhausted limit
-      lastError = err;
+      // stop_reason tells us definitively whether this was real truncation
+      // (max_tokens -- the budget genuinely wasn't enough) or something
+      // else entirely (a complete response that still failed to parse/
+      // validate, e.g. a formatting slip) -- these need different fixes,
+      // and guessing which one happened from the error message alone
+      // wasted real time and retries previously.
+      const diag = stopReason === 'max_tokens'
+        ? `hit max_tokens (cap=${maxTokens}, got ${text.length} chars) -- genuine truncation`
+        : `stop_reason=${stopReason || 'unknown'}, response complete (${text.length} chars) but ${err.message}. Tail: ...${text.slice(-120).replace(/\s+/g, ' ')}`;
+      lastError = new Error(diag);
+      lastError.isRateLimit = false;
       currentPrompt = `${prompt}\n\nYour previous response was invalid: ${err.message}\nReturn ONLY valid JSON matching the required schema, no other text.`;
     }
   }
