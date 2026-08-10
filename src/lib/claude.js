@@ -5,10 +5,7 @@ function isConfigured() {
   return Boolean(process.env.ANTHROPIC_API_KEY);
 }
 
-async function callClaude({ system, prompt, maxTokens = 4096, model, temperature }) {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error('ANTHROPIC_API_KEY not set');
-
+async function postToAnthropic({ system, prompt, maxTokens, model, temperature, apiKey }) {
   const res = await fetch(ANTHROPIC_API_BASE, {
     method: 'POST',
     headers: {
@@ -35,10 +32,30 @@ async function callClaude({ system, prompt, maxTokens = 4096, model, temperature
     // use this to stop outright instead of retrying/splitting into more
     // doomed requests against an already-exhausted limit.
     err.isRateLimit = res.status === 429;
+    // Some model generations reject `temperature` outright (400,
+    // "temperature is deprecated for this model") instead of just ignoring
+    // it -- seen live on claude-sonnet-5. Rather than every call site
+    // needing to know which models do/don't accept it, flag this so
+    // callClaude can transparently retry once without it.
+    err.isTemperatureUnsupported = res.status === 400 && temperature !== undefined && /temperature/i.test(body);
     throw err;
   }
   const data = await res.json();
   return { text: data.content?.[0]?.text || '', stopReason: data.stop_reason };
+}
+
+async function callClaude({ system, prompt, maxTokens = 4096, model, temperature }) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error('ANTHROPIC_API_KEY not set');
+
+  try {
+    return await postToAnthropic({ system, prompt, maxTokens, model, temperature, apiKey });
+  } catch (err) {
+    if (err.isTemperatureUnsupported) {
+      return await postToAnthropic({ system, prompt, maxTokens, model, temperature: undefined, apiKey });
+    }
+    throw err;
+  }
 }
 
 function extractJson(text) {
