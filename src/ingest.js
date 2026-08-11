@@ -114,9 +114,10 @@ async function run() {
       if (m) classified.push({ ...m, ...c });
     }
 
-    const negative = classified.filter((m) => m.sentiment === 'negative');
+    const irrelevant = classified.filter((m) => m.relevant === false);
+    const negative = classified.filter((m) => m.relevant !== false && m.sentiment === 'negative');
     const urgent = negative.filter((m) => m.severity === 'high');
-    console.log(`Classified ${classified.length} mentions: ${negative.length} negative (${urgent.length} high severity).`);
+    console.log(`Classified ${classified.length} mentions: ${irrelevant.length} irrelevant (discarded), ${negative.length} negative (${urgent.length} high severity).`);
 
     await sendUrgentAlert(urgent); // real-time, every run
 

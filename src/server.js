@@ -12,7 +12,13 @@ app.get('/api/mentions', async (req, res) => {
   const days = Number(req.query.days) || 14;
   const limit = Math.min(Number(req.query.limit) || 200, 1000);
   const params = [days, limit];
-  let where = `first_seen_at >= now() - ($1 || ' days')::interval`;
+  // ?discarded=1 flips this to show only items marked irrelevant, for
+  // auditing what the relevance filter is catching (and why, via
+  // sentiment_reason) -- default view hides them everywhere else.
+  let where = req.query.discarded
+    ? `relevant = false`
+    : `relevant IS DISTINCT FROM false`;
+  where += ` AND first_seen_at >= now() - ($1 || ' days')::interval`;
 
   if (req.query.source) {
     params.push(req.query.source);
@@ -37,7 +43,7 @@ app.get('/api/stats', async (req, res) => {
   const result = await pool.query(
     `SELECT source, date_trunc('day', first_seen_at) AS day, count(*)::int AS count
      FROM mentions
-     WHERE first_seen_at >= now() - ($1 || ' days')::interval
+     WHERE first_seen_at >= now() - ($1 || ' days')::interval AND relevant IS DISTINCT FROM false
      GROUP BY source, day
      ORDER BY day ASC`,
     [days]
@@ -50,7 +56,7 @@ app.get('/api/sentiment-stats', async (req, res) => {
   const result = await pool.query(
     `SELECT COALESCE(sentiment, 'unclassified') AS sentiment, count(*)::int AS count
      FROM mentions
-     WHERE first_seen_at >= now() - ($1 || ' days')::interval
+     WHERE first_seen_at >= now() - ($1 || ' days')::interval AND relevant IS DISTINCT FROM false
      GROUP BY sentiment`,
     [days]
   );

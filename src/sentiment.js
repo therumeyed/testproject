@@ -7,19 +7,20 @@ function buildPrompt(mentions) {
     .map((m, i) => `${i}. [${m.source}] ${m.title ? m.title + ' -- ' : ''}${(m.snippet || '').slice(0, 400)}`)
     .join('\n');
 
-  return `You are classifying public mentions of Melbourne Airport's parking and pickup/drop-off services for the airport's operations team. They just introduced a change requiring a roughly 5-minute walk between the pickup/drop-off area and the terminal, and want to catch real customer dissatisfaction about this and related issues (pricing, signage, shuttle service, staff, accessibility, wait times).
+  return `You are screening and classifying items that came up in a search for "Melbourne Airport" (Melbourne, Victoria, Australia -- MEL) for the airport's operations team. They just introduced a change requiring a roughly 5-minute walk between the pickup/drop-off area and the terminal, and want to catch real customer dissatisfaction about this and related issues (pricing, signage, shuttle service, staff, accessibility, wait times).
 
-For each numbered item, classify by actual meaning and tone, not just keyword matching -- for example "kind of a hassle now" or "wasn't expecting that walk with all our bags" is negative even though it uses no explicit negative word like "bad" or "terrible".
+IMPORTANT -- these are search results, not guaranteed matches. Some are false positives: they may be about a *different* place also called Melbourne (e.g. Melbourne, Florida, USA and its own unrelated "Melbourne Airport"/MLB), about a *different* airport entirely that happened to appear in the same search or post (e.g. Sydney Airport), or otherwise have no real connection to Melbourne Airport, Australia even though the search returned them. Judge this ONLY from the text given below -- never assume something is genuinely about Melbourne Airport, Australia just because it showed up in this search.
 
-Return a JSON array, same order as the items, one object each with:
-- "sentiment": "negative", "neutral", or "positive"
-- "severity": only for negative items -- "low" (mild dissatisfaction/minor gripe), "medium" (clear complaint), or "high" (strong anger, safety concern, explicit refund/legal/media-escalation threat, or a severe operational failure). null for neutral/positive items.
-- "reason": one short sentence explaining the classification
+For each numbered item, return:
+- "relevant": true only if the text itself clearly concerns Melbourne Airport, Melbourne/Victoria/Australia, or one of its car park products -- false if it's about a different place/airport, or the text gives no real indication either way
+- "sentiment": "negative", "neutral", or "positive" -- classify by actual meaning and tone, not just keyword matching (e.g. "kind of a hassle now" or "wasn't expecting that walk with all our bags" is negative even with no explicit negative word). If "relevant" is false, just use "neutral".
+- "severity": only for relevant negative items -- "low" (mild dissatisfaction/minor gripe), "medium" (clear complaint), or "high" (strong anger, safety concern, explicit refund/legal/media-escalation threat, or a severe operational failure). null otherwise.
+- "reason": one short sentence. If "relevant" is false, explain why (e.g. "refers to Melbourne, Florida's airport" or "post is about Sydney Airport, no Melbourne connection in the text"). Otherwise explain the sentiment classification.
 
 Items:
 ${numbered}
 
-Respond with ONLY the JSON array. No other text.`;
+Respond with ONLY a JSON array, same order as the items. No other text.`;
 }
 
 async function classifyBatch(mentions) {
@@ -48,6 +49,7 @@ async function classifyBatch(mentions) {
 
   return mentions.map((m, i) => ({
     id: m.id,
+    relevant: parsed[i]?.relevant !== false, // default true if the model omitted it
     sentiment: parsed[i]?.sentiment || null,
     severity: parsed[i]?.severity || null,
     reason: parsed[i]?.reason || null

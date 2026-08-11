@@ -27,6 +27,7 @@ async function initSchema() {
     ALTER TABLE mentions ADD COLUMN IF NOT EXISTS severity TEXT;
     ALTER TABLE mentions ADD COLUMN IF NOT EXISTS sentiment_reason TEXT;
     ALTER TABLE mentions ADD COLUMN IF NOT EXISTS alerted_at TIMESTAMPTZ;
+    ALTER TABLE mentions ADD COLUMN IF NOT EXISTS relevant BOOLEAN;
     CREATE INDEX IF NOT EXISTS idx_mentions_first_seen ON mentions(first_seen_at);
     CREATE INDEX IF NOT EXISTS idx_mentions_source ON mentions(source);
     CREATE INDEX IF NOT EXISTS idx_mentions_sentiment ON mentions(sentiment);
@@ -87,10 +88,10 @@ async function insertMentions(mentions) {
   return insertedRows;
 }
 
-async function updateSentiment(id, { sentiment, severity, reason }) {
+async function updateSentiment(id, { sentiment, severity, reason, relevant }) {
   await pool.query(
-    `UPDATE mentions SET sentiment = $2, severity = $3, sentiment_reason = $4 WHERE id = $1`,
-    [id, sentiment || null, severity || null, reason || null]
+    `UPDATE mentions SET sentiment = $2, severity = $3, sentiment_reason = $4, relevant = $5 WHERE id = $1`,
+    [id, sentiment || null, severity || null, reason || null, relevant === false ? false : true]
   );
 }
 
@@ -107,6 +108,7 @@ async function getTodaysNegativeMentions() {
     SELECT id, source, title, snippet, url, severity, sentiment_reason AS reason
     FROM mentions
     WHERE sentiment = 'negative'
+      AND relevant IS DISTINCT FROM false
       AND (first_seen_at AT TIME ZONE 'Australia/Melbourne')::date = (now() AT TIME ZONE 'Australia/Melbourne')::date
     ORDER BY first_seen_at ASC
   `);
