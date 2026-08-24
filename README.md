@@ -7,6 +7,7 @@ Tracks mentions of "Melbourne Airport" and stores them in Postgres, refreshed on
 | Reddit | Posts (not comments) from specific communities only — `APIFY_REDDIT_SUBREDDITS`, defaults to r/melbourne + r/australia — filtered locally by keyword | Apify token |
 | YouTube | Videos matching the search term | Apify token |
 | Web / Facebook / Instagram / LinkedIn search | Public, Google-indexed posts/pages matching `site:facebook.com`, `site:instagram.com`, `site:linkedin.com`, and general web results | Apify token |
+| News | Articles from Google News' RSS feeds (business/press coverage) — broader and more reliable than trying to force Google's News tab through the general web-search actor, which can't parse it | Apify token |
 | Facebook (direct) | Public posts whose text matches the search phrase, found via Facebook's own search (logged-out) | Apify token |
 | Instagram (hashtag) | Public posts tagged with the configured hashtag(s) — Instagram has no free-text post search, hashtag is the closest real capability | Apify token |
 | Google reviews | New reviews (rating, text, translated text) across MelAir's Google Business Profile car park listings (currently 6 configured), one row per listing per review | Apify token + Place IDs |
@@ -40,10 +41,11 @@ You need a local or hosted Postgres instance for `DATABASE_URL`. Tables are crea
 
 **Apify** (powers Reddit, YouTube, all the `site:` searches, the direct Facebook/Instagram sources, and Google reviews) — sign up at https://apify.com, go to Settings → Integrations, copy the API token → put it in `APIFY_TOKEN`. One token covers all six actors. Apify bills per actor run (compute + result volume); at this scale (a handful of keywords/hashtags/place IDs checked once a day) this should land in the low tens of dollars a month, but check current pricing on each actor's Store page before committing — community actor pricing isn't fixed the way an official API's is, and the Facebook search actor specifically caps free-tier results at 20/run (see its Store page for paid tiers). One operational note from getting this running: some actors require a one-time "rent"/subscribe click on their Store page before API access works, even with a valid token — if a source fails with `actor-is-not-rented`, that's what's happening.
 
-Default actors used (overridable via `APIFY_REDDIT_ACTOR_ID`, `APIFY_YOUTUBE_ACTOR_ID`, `APIFY_GOOGLE_SEARCH_ACTOR_ID`, `APIFY_FACEBOOK_ACTOR_ID`, `APIFY_INSTAGRAM_ACTOR_ID`, `APIFY_GOOGLE_REVIEWS_ACTOR_ID` — see `.env.example`):
+Default actors used (overridable via `APIFY_REDDIT_ACTOR_ID`, `APIFY_YOUTUBE_ACTOR_ID`, `APIFY_GOOGLE_SEARCH_ACTOR_ID`, `APIFY_GOOGLE_NEWS_ACTOR_ID`, `APIFY_FACEBOOK_ACTOR_ID`, `APIFY_INSTAGRAM_ACTOR_ID`, `APIFY_GOOGLE_REVIEWS_ACTOR_ID` — see `.env.example`):
 - Reddit: [`trudax/reddit-scraper-lite`](https://apify.com/trudax/reddit-scraper-lite), pay-per-result (~$3.40/1,000). Scoped to `APIFY_REDDIT_SUBREDDITS` (default `melbourne,australia`) rather than a site-wide search — pulls each community's newest posts and filters by keyword locally, which keeps cost bounded and predictable. Add more communities anytime, comma-separated, no code change needed.
 - YouTube: [`streamers/youtube-scraper`](https://apify.com/streamers/youtube-scraper)
-- Google search: [`apify/google-search-scraper`](https://apify.com/apify/google-search-scraper) (official Apify actor, not a community one — the most stable of the six)
+- Google search: [`apify/google-search-scraper`](https://apify.com/apify/google-search-scraper) (official Apify actor, not a community one — the most stable of the seven)
+- Google News: [`automation-lab/google-news-scraper`](https://apify.com/automation-lab/google-news-scraper) — built on Google News' RSS feeds, not a scrape of the news.google.com page (tested: feeding that URL, or Google's News-tab parameter, into the general search actor above doesn't work — it either treats the URL as literal search text or returns nothing, since that actor can't parse either page's layout).
 - Facebook direct search: [`scrapeforge/facebook-search-posts`](https://apify.com/scrapeforge/facebook-search-posts)
 - Instagram hashtag search: [`instaprism/instagram-hashtag-posts`](https://apify.com/instaprism/instagram-hashtag-posts) — set `APIFY_INSTAGRAM_HASHTAGS` (comma-separated, no `#`) to whichever hashtags are actually worth tracking; it defaults to a slugified `SEARCH_QUERY` (`melbourneairport`) if unset, which may not match what people actually tag posts with.
 - Google reviews: [`compass/google-maps-reviews-scraper`](https://apify.com/compass/google-maps-reviews-scraper), very cheap (~$0.05/1,000 reviews).
@@ -95,11 +97,16 @@ This repo includes `render.yaml`, so Render can provision everything from one Bl
 
 ## 4. Sentiment classification and email alerts
 
-Every newly-inserted mention (never re-classified once done, matching the "only new content" rule elsewhere) is classified by Claude into `negative` / `neutral` / `positive`, with a `low` / `medium` / `high` severity and a one-line reason for negatives. This runs by meaning, not a keyword list — e.g. "kind of a hassle now" is correctly flagged negative even with no explicit negative word — which was the point of picking it over a free keyword-based approach.
+Every newly-inserted mention (never re-classified once done, matching the "only new content" rule elsewhere) is classified by Claude into two things:
 
-Two emails come out of each daily run, both via [Resend](https://resend.com):
-- **Urgent alert** — sent immediately (i.e. same run) if any mention classified `high` severity is found. Marks each as alerted (`alerted_at`) so it's never re-sent for the same mention.
-- **Daily digest** — always sent once per run, listing every `negative` mention found that day (all severities), grouped with source/severity/link/reason. Sent even when there's nothing negative (says so explicitly) — doubles as a quiet confirmation the pipeline ran, not just a complaints feed.
+1. **Relevance** — is the text itself genuinely about Melbourne Airport, Australia? Search-based sources can return real false positives: a different "Melbourne" (e.g. Melbourne, Florida's own airport), a different airport entirely (an Instagram post about a Sydney Airport incident that happened to also carry unrelated tags), or a hashtag/keyword match with no real substance behind it. The prompt explicitly asks the model to judge this only from the given text, with worked examples of what doesn't count — never to assume relevance just because a search returned it. Irrelevant items are kept in the DB (so the dedupe constraint still works if the same off-topic item resurfaces) but hidden from the dashboard, stats, and digest/alerts. Audit what's been filtered, and why, via `GET /api/mentions?discarded=1`.
+2. **Sentiment** — `negative` / `neutral` / `positive`, with a `low` / `medium` / `high` severity and a one-line reason for negatives, judged by meaning rather than a keyword list (e.g. "kind of a hassle now" is negative with no explicit negative word). Critically, this is scored **specifically toward the airport**, not overall post tone — a post grumbling about the weather while praising the airport is positive, not negative, even though the model is told not to just skip past an unrelated sad emoji or downbeat word without checking whether it's actually about the airport experience.
+
+Both of these came from real false positives found during tuning — worth knowing the prompt is calibrated against actual cases, not just written from first principles.
+
+Two emails come out of this pipeline, both via [Resend](https://resend.com):
+- **Urgent alert** — real-time, sent on *any* of the day's runs that finds a `high` severity negative (and relevant) mention. Marks each as alerted (`alerted_at`) so it's never re-sent for the same mention.
+- **Daily digest** — genuinely once/day, sent only on the ~5pm Melbourne run, aggregating every negative-and-relevant mention first seen across *all* of that day's runs (see `getTodaysNegativeMentions()` in `db.js`), not just that run's own findings. Sent even when there's nothing negative (says so explicitly) — doubles as a quiet confirmation the pipeline ran, not just a complaints feed.
 
 **Setup:**
 1. **Anthropic** — get a key at https://console.anthropic.com → `ANTHROPIC_API_KEY`. Uses Haiku by default (`ANTHROPIC_MODEL` to override); cheap at this volume — classification is batched (20 mentions/request), typically a few requests per day.

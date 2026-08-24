@@ -10,11 +10,13 @@ const instagramSearch = require('./sources/instagramSearch');
 const facebookOwned = require('./sources/facebookOwned');
 const instagramOwned = require('./sources/instagramOwned');
 const googleReviews = require('./sources/googleReviews');
+const googleNews = require('./sources/googleNews');
 
 const SOURCES = [
   { name: 'reddit', fetch: reddit.fetchMentions },
   { name: 'youtube', fetch: youtube.fetchMentions },
   { name: 'serp', fetch: serp.fetchMentions },
+  { name: 'news_search', fetch: googleNews.fetchMentions },
   { name: 'facebook_direct', fetch: facebookSearch.fetchMentions },
   { name: 'instagram_direct', fetch: instagramSearch.fetchMentions },
   { name: 'google_reviews', fetch: googleReviews.fetchMentions },
