@@ -13,9 +13,9 @@ IMPORTANT -- these are search results, not guaranteed matches. Some are false po
 
 For each numbered item, return:
 - "relevant": true only if the text itself clearly concerns Melbourne Airport, Melbourne/Victoria/Australia, or one of its car park products -- false if it's about a different place/airport, or the text gives no real indication either way
-- "sentiment": "negative", "neutral", or "positive" -- classify by actual meaning and tone, not just keyword matching (e.g. "kind of a hassle now" or "wasn't expecting that walk with all our bags" is negative even with no explicit negative word). If "relevant" is false, just use "neutral".
+- "sentiment": judge sentiment SPECIFICALLY toward the airport/its services -- not the overall tone of the whole post. A post can be negative about something unrelated (weather, traffic, the writer's day, an emoji that isn't actually about the airport) while being neutral or positive about the airport itself, and vice versa -- only the airport-directed sentiment counts. Example: "back to cold weather in Melbourne lol, but I love this airport for its cheesecake" is POSITIVE (the weather complaint is irrelevant noise; the airport itself is explicitly praised). Classify by actual meaning and tone, not superficial cues like emojis or isolated words considered out of context -- e.g. "kind of a hassle now" is negative even with no explicit negative word, precisely because it's said *about the airport experience*, not because of tone alone. If "relevant" is false, just use "neutral".
 - "severity": only for relevant negative items -- "low" (mild dissatisfaction/minor gripe), "medium" (clear complaint), or "high" (strong anger, safety concern, explicit refund/legal/media-escalation threat, or a severe operational failure). null otherwise.
-- "reason": one short sentence. If "relevant" is false, explain why (e.g. "refers to Melbourne, Florida's airport" or "post is about Sydney Airport, no Melbourne connection in the text"). Otherwise explain the sentiment classification.
+- "reason": one short sentence. If "relevant" is false, explain why (e.g. "refers to Melbourne, Florida's airport" or "post is about Sydney Airport, no Melbourne connection in the text"). Otherwise explain what specifically about the airport drove the sentiment classification.
 
 Items:
 ${numbered}
