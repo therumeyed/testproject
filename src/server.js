@@ -73,11 +73,17 @@ app.get('/api/analytics', async (req, res) => {
   const prev = previousPeriod(filters.from, filters.to);
   const { where: prevWhere, params: prevParams } = buildWhere(filters, prev.from, prev.to);
 
-  const [totalRes, categoryRes, sourceRes, dayRes, categoryNegRes, prevTotalRes, prevSentimentRes, prevCategoryNegRes] = await Promise.all([
+  const [totalRes, categoryRes, categorySentimentRes, sourceRes, dayRes, categoryNegRes, prevTotalRes, prevSentimentRes, prevCategoryRes, prevCategoryNegRes] = await Promise.all([
     pool.query(`SELECT count(*)::int AS total FROM mentions WHERE ${where}`, params),
     pool.query(
       `SELECT COALESCE(category, 'unclassified') AS category, count(*)::int AS count
        FROM mentions WHERE ${where} GROUP BY 1`,
+      params
+    ),
+    pool.query(
+      `SELECT COALESCE(category, 'unclassified') AS category,
+              COALESCE(sentiment, 'unclassified') AS sentiment, count(*)::int AS count
+       FROM mentions WHERE ${where} GROUP BY 1, 2`,
       params
     ),
     pool.query(
@@ -98,6 +104,11 @@ app.get('/api/analytics', async (req, res) => {
     pool.query(`SELECT count(*)::int AS total FROM mentions WHERE ${prevWhere}`, prevParams),
     pool.query(
       `SELECT COALESCE(sentiment, 'unclassified') AS sentiment, count(*)::int AS count
+       FROM mentions WHERE ${prevWhere} GROUP BY 1`,
+      prevParams
+    ),
+    pool.query(
+      `SELECT COALESCE(category, 'unclassified') AS category, count(*)::int AS count
        FROM mentions WHERE ${prevWhere} GROUP BY 1`,
       prevParams
     ),
@@ -131,10 +142,24 @@ app.get('/api/analytics', async (req, res) => {
     unclassified: { count: sentimentTotals.unclassified, pct: pct(sentimentTotals.unclassified) }
   };
 
+  // Per-category sentiment split (for the Categories view) -- built the same
+  // way as the overall sentiment totals above, so each category's own
+  // positive+neutral+negative+unclassified always sums to that category's
+  // count, which in turn always sums to the filtered total.
+  const categorySentiment = new Map();
+  for (const row of categorySentimentRes.rows) {
+    if (!categorySentiment.has(row.category)) {
+      categorySentiment.set(row.category, { positive: 0, neutral: 0, negative: 0, unclassified: 0 });
+    }
+    const key = ['positive', 'neutral', 'negative'].includes(row.sentiment) ? row.sentiment : 'unclassified';
+    categorySentiment.get(row.category)[key] += row.count;
+  }
+
   const categories = CATEGORIES.map((c) => ({
     category: c.value,
     label: c.label,
-    count: categoryRes.rows.find((r) => r.category === c.value)?.count || 0
+    count: categoryRes.rows.find((r) => r.category === c.value)?.count || 0,
+    sentiment: categorySentiment.get(c.value) || { positive: 0, neutral: 0, negative: 0, unclassified: 0 }
   }));
 
   const todayStr = melbourneDateString(new Date());
@@ -174,6 +199,11 @@ app.get('/api/analytics', async (req, res) => {
         negative: { count: prevSentimentTotals.negative, pct: prevPct(prevSentimentTotals.negative) },
         unclassified: { count: prevSentimentTotals.unclassified, pct: prevPct(prevSentimentTotals.unclassified) }
       },
+      categories: CATEGORIES.map((c) => ({
+        category: c.value,
+        label: c.label,
+        count: prevCategoryRes.rows.find((r) => r.category === c.value)?.count || 0
+      })),
       negativeByCategory: CATEGORIES.map((c) => ({
         category: c.value,
         label: c.label,

@@ -95,12 +95,35 @@ describe('combined filters + aggregate reconciliation (DB-backed, real server)',
     assert.equal(negSum, a.sentiment.negative.count);
   });
 
+  test('each category\'s sentiment split reconciles with that category\'s own count and with the overall sentiment totals', async () => {
+    const a = await (await fetch(`${BASE}/api/analytics`)).json();
+    for (const c of a.categories) {
+      const sum = c.sentiment.positive + c.sentiment.neutral + c.sentiment.negative + c.sentiment.unclassified;
+      assert.equal(sum, c.count, `category ${c.category} sentiment split must sum to its own count`);
+    }
+    const parking = a.categories.find((c) => c.category === 'parking');
+    assert.equal(parking.sentiment.negative, 2); // a1, a2
+    assert.equal(parking.sentiment.positive, 1); // a3
+    // summing one sentiment bucket across every category must equal that
+    // sentiment's overall total -- same invariant as negativeByCategory
+    const totalNegativeAcrossCategories = a.categories.reduce((s, c) => s + c.sentiment.negative, 0);
+    assert.equal(totalNegativeAcrossCategories, a.sentiment.negative.count);
+  });
+
   test('previous-period comparison uses the immediately preceding 14-day window', async () => {
     const a = await (await fetch(`${BASE}/api/analytics`)).json();
     assert.equal(a.previousPeriod.total, 2); // a7, a8
     assert.equal(a.previousPeriod.totalChangePct, 150); // (5-2)/2 * 100
     assert.equal(a.previousPeriod.sentiment.negative.count, 1);
     assert.equal(a.previousPeriod.sentiment.neutral.count, 1);
+  });
+
+  test('previousPeriod.categories reconciles with previousPeriod.total, for the Categories view\'s trend-vs-last-period', async () => {
+    const a = await (await fetch(`${BASE}/api/analytics`)).json();
+    const prevCategorySum = a.previousPeriod.categories.reduce((s, c) => s + c.count, 0);
+    assert.equal(prevCategorySum, a.previousPeriod.total);
+    assert.equal(a.previousPeriod.categories.find((c) => c.category === 'parking').count, 1); // a7
+    assert.equal(a.previousPeriod.categories.find((c) => c.category === 'taxi_rideshare').count, 1); // a8
   });
 
   test('/api/mentions and /api/analytics agree on the same category filter', async () => {

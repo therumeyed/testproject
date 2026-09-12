@@ -125,6 +125,7 @@ function render() {
     renderKpis,
     renderChart,
     renderCategoryBars,
+    renderCategoryDetail,
     renderSourceBars,
     renderWatchNote,
     renderMentions
@@ -140,9 +141,10 @@ function render() {
 
 function applyViewVisibility() {
   const v = state.view;
-  document.getElementById('kpis').hidden = v === 'sources' || v === 'settings';
-  document.getElementById('overviewGrid').hidden = v === 'mentions' || v === 'sources' || v === 'settings';
-  document.getElementById('mentionsSection').hidden = v === 'sources' || v === 'settings';
+  document.getElementById('kpis').hidden = v === 'mentions' || v === 'categories' || v === 'sources' || v === 'settings';
+  document.getElementById('overviewGrid').hidden = v !== 'overview';
+  document.getElementById('mentionsSection').hidden = v === 'categories' || v === 'sources' || v === 'settings';
+  document.getElementById('categoriesSection').hidden = v !== 'categories';
   document.getElementById('sourcesSection').hidden = v !== 'sources';
   document.getElementById('settingsSection').hidden = v !== 'settings';
   document.getElementById('mentionsTitle').textContent = v === 'mentions' ? 'All mentions' : 'Recent mentions';
@@ -274,6 +276,63 @@ function renderCategoryBars() {
       <span>${c.count.toLocaleString()}</span>
     </button>`;
   }).join('');
+}
+
+// Dedicated Categories view: one row per category with its count, share of
+// the filtered total, sentiment split, and change vs. the immediately
+// preceding equivalent period -- all derived directly from a.categories /
+// a.previousPeriod.categories, never invented client-side.
+function renderCategoryDetail() {
+  const a = state.analytics;
+  const container = document.getElementById('categoryDetail');
+  if (!a) return;
+  const sorted = [...a.categories].sort((x, y) => y.count - x.count);
+  const prevByCategory = new Map(a.previousPeriod.categories.map((c) => [c.category, c.count]));
+
+  const legend = ['positive', 'neutral', 'negative', 'unclassified'].map((s) =>
+    `<span><i style="background:${sentimentBarColor(s)}"></i>${SENTIMENT_META[s].label}</span>`
+  ).join('');
+
+  const rows = sorted.map((c) => {
+    const meta = CATEGORY_META[c.category] || CATEGORY_META.unclassified;
+    const share = a.total > 0 ? Math.round((c.count / a.total) * 1000) / 10 : 0;
+    const s = c.sentiment;
+    const segTotal = s.positive + s.neutral + s.negative + s.unclassified || 1;
+    const seg = (n) => (n / segTotal) * 100;
+    const prevCount = prevByCategory.get(c.category) || 0;
+    let trend;
+    if (prevCount === 0 && c.count === 0) trend = { text: '– no data', cls: '' };
+    else if (prevCount === 0) trend = { text: 'New this period', cls: 'up' };
+    else {
+      const changePct = Math.round(((c.count - prevCount) / prevCount) * 1000) / 10;
+      trend = changePct === 0
+        ? { text: 'Flat vs. last period', cls: '' }
+        : { text: `${Math.abs(changePct)}% vs. last period`, cls: changePct > 0 ? 'up' : 'down' };
+    }
+    const active = state.filters.category === c.category;
+    return `<button class="catdetailrow" type="button" data-category="${c.category}" style="${active ? 'background:#f8fafc' : ''}">
+      <div>
+        <div class="catdetail-name">${escapeHtml(meta.label)}</div>
+        <div class="catdetail-share">${share}% of filtered mentions</div>
+      </div>
+      <div>
+        <div class="catdetail-stack">
+          <span style="width:${seg(s.positive)}%;background:${sentimentBarColor('positive')}"></span>
+          <span style="width:${seg(s.neutral)}%;background:${sentimentBarColor('neutral')}"></span>
+          <span style="width:${seg(s.negative)}%;background:${sentimentBarColor('negative')}"></span>
+          <span style="width:${seg(s.unclassified)}%;background:${sentimentBarColor('unclassified')}"></span>
+        </div>
+      </div>
+      <div class="catdetail-count">${c.count.toLocaleString()}</div>
+      <div class="catdetail-trend ${trend.cls}">${trend.text}</div>
+    </button>`;
+  }).join('');
+
+  container.innerHTML = `<div class="catdetail-legend-row">${legend}</div>${rows || '<p style="color:var(--muted);font-size:13px;padding:14px 0;">No data for this period.</p>'}`;
+}
+
+function sentimentBarColor(s) {
+  return { positive: '#14804a', neutral: '#c9d2df', negative: '#c43d3d', unclassified: '#dfe5ee' }[s];
 }
 
 function renderSourceBars() {
@@ -524,6 +583,16 @@ function wireEvents() {
     if (!row) return;
     const cat = row.dataset.category;
     state.filters.category = state.filters.category === cat ? 'all' : cat;
+    state.page = 1;
+    loadAll();
+  });
+
+  document.getElementById('categoryDetail').addEventListener('click', (e) => {
+    const row = e.target.closest('[data-category]');
+    if (!row) return;
+    const cat = row.dataset.category;
+    state.filters.category = state.filters.category === cat ? 'all' : cat;
+    state.view = 'mentions';
     state.page = 1;
     loadAll();
   });
