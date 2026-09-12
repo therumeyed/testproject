@@ -243,6 +243,11 @@
       <section class="card" id="settingsSection" hidden style="padding:17px 18px;">
         <h2 style="font-size:15px;margin:0 0 8px;">Settings</h2>
         <p style="color:var(--muted);font-size:13px;">Admin actions (manual category correction, reclassifying unclassified mentions) require the workspace admin token, entered inline when you use them. No other configuration is needed here yet.</p>
+        <div style="border-top:1px solid var(--line);margin-top:14px;padding-top:14px;">
+          <h3 style="font-size:13px;margin:0 0 4px;">Categorize mentions with no category yet</h3>
+          <p style="color:var(--muted);font-size:13px;margin:0 0 10px;">Mentions ingested before category tracking was added (or that failed classification) have no category at all, distinct from ones the classifier looked at but couldn't confidently categorize. Run this to classify them.</p>
+          <button class="btn" id="backfillBtn" type="button">Backfill missing categories</button>
+        </div>
       </section>
 
     </div>

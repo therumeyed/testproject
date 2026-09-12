@@ -498,6 +498,57 @@ async function reclassifyUnclassified() {
   }
 }
 
+// Pages through /admin/backfill-categories until the server reports no rows
+// left with no category at all -- capped at 50 pages (5,000 mentions) per
+// click so one runaway backlog can't hang the button indefinitely; a second
+// click resumes automatically since the server-side cursor is stateless
+// (each call starts from afterId=0 and just stops once nothing matches).
+async function backfillCategories() {
+  const token = getAdminToken();
+  if (!token) return;
+  const btn = document.getElementById('backfillBtn');
+  const originalText = btn.textContent;
+  btn.disabled = true;
+  let afterId = 0;
+  let totalAttempted = 0;
+  let totalBackfilled = 0;
+  try {
+    for (let page = 0; page < 50; page++) {
+      btn.textContent = totalAttempted > 0 ? `Backfilling… (${totalAttempted} processed)` : 'Backfilling…';
+      const res = await fetch('/admin/backfill-categories', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ afterId })
+      });
+      if (res.status === 403) {
+        sessionStorage.removeItem('adminToken');
+        alert('Admin token was rejected. Please try again.');
+        return;
+      }
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert(`Backfill failed: ${err.error || res.status}`);
+        return;
+      }
+      const data = await res.json();
+      totalAttempted += data.attempted;
+      totalBackfilled += data.backfilled;
+      afterId = data.lastId;
+      if (data.done) {
+        alert(totalAttempted === 0
+          ? 'Nothing to backfill -- every mention already has a category.'
+          : `Backfill complete: classified ${totalBackfilled} of ${totalAttempted} mentions that had no category.`);
+        return;
+      }
+    }
+    alert(`Backfilled ${totalBackfilled} of ${totalAttempted} so far. There's more left -- click "Backfill missing categories" again to continue.`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalText;
+    loadAll();
+  }
+}
+
 function exportCsv() {
   fetch(`/api/mentions?${apiQueryString({ page: 1, pageSize: 1000 })}`)
     .then((r) => r.json())
@@ -560,6 +611,8 @@ function wireEvents() {
   });
 
   document.getElementById('reclassifyBtn').addEventListener('click', reclassifyUnclassified);
+
+  document.getElementById('backfillBtn').addEventListener('click', backfillCategories);
 
   document.getElementById('exportBtn').addEventListener('click', exportCsv);
 

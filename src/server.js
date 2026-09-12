@@ -1,7 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const path = require('path');
-const { pool, initSchemaWithRetry, setManualCategory, getUnclassifiedMentions, updateCategory } = require('./db');
+const { pool, initSchemaWithRetry, setManualCategory, getUnclassifiedMentions, getMentionsNeedingCategoryBackfill, updateCategory } = require('./db');
 const { classifyMentions } = require('./sentiment');
 const { CATEGORIES, CATEGORY_VALUES } = require('./categories');
 const { parseFilters, buildWhere, previousPeriod } = require('./filters');
@@ -249,6 +249,30 @@ app.post('/admin/reclassify-unclassified', express.json(), requireAdmin, async (
     await updateCategory(c.id, { category: c.category, category_confidence: c.category_confidence });
   }
   res.json({ ok: true, attempted: rows.length, reclassified: classifications.length });
+});
+
+// One page of the resumable backfill for rows with NO category at all
+// (category IS NULL) -- distinct from reclassify-unclassified above, which
+// only retries rows the classifier already looked at and gave up on.
+// `npm run backfill-categories` does the same thing to completion from a
+// shell; this exposes one page of it over HTTP for when shell access isn't
+// available (e.g. triggering it from the deployed dashboard). Same cursor
+// logic as getMentionsNeedingCategoryBackfill: the client advances afterId
+// to `lastId` and calls again until `done` is true.
+app.post('/admin/backfill-categories', express.json(), requireAdmin, async (req, res) => {
+  if (!process.env.ANTHROPIC_API_KEY) {
+    return res.status(400).json({ error: 'ANTHROPIC_API_KEY not set' });
+  }
+  const afterId = Number(req.body?.afterId) || 0;
+  const rows = await getMentionsNeedingCategoryBackfill(100, afterId);
+  if (rows.length === 0) {
+    return res.json({ ok: true, attempted: 0, backfilled: 0, lastId: afterId, done: true });
+  }
+  const classifications = await classifyMentions(rows);
+  for (const c of classifications) {
+    await updateCategory(c.id, { category: c.category, category_confidence: c.category_confidence });
+  }
+  res.json({ ok: true, attempted: rows.length, backfilled: classifications.length, lastId: rows[rows.length - 1].id, done: rows.length < 100 });
 });
 
 const port = process.env.PORT || 3000;
