@@ -28,6 +28,10 @@ async function initSchema() {
     ALTER TABLE mentions ADD COLUMN IF NOT EXISTS sentiment_reason TEXT;
     ALTER TABLE mentions ADD COLUMN IF NOT EXISTS alerted_at TIMESTAMPTZ;
     ALTER TABLE mentions ADD COLUMN IF NOT EXISTS relevant BOOLEAN;
+    ALTER TABLE mentions ADD COLUMN IF NOT EXISTS category TEXT;
+    ALTER TABLE mentions ADD COLUMN IF NOT EXISTS category_confidence REAL;
+    ALTER TABLE mentions ADD COLUMN IF NOT EXISTS category_source TEXT;
+    CREATE INDEX IF NOT EXISTS idx_mentions_category ON mentions(category);
     CREATE INDEX IF NOT EXISTS idx_mentions_first_seen ON mentions(first_seen_at);
     CREATE INDEX IF NOT EXISTS idx_mentions_source ON mentions(source);
     CREATE INDEX IF NOT EXISTS idx_mentions_sentiment ON mentions(sentiment);
@@ -88,15 +92,63 @@ async function insertMentions(mentions) {
   return insertedRows;
 }
 
-async function updateSentiment(id, { sentiment, severity, reason, relevant }) {
+// Called once per freshly-classified mention (from ingest.js or the backfill
+// job) -- always category_source='ai' here. Manual overrides go through
+// setManualCategory() instead, and both the backfill and reclassify queries
+// below exclude category_source='manual' rows so a manual choice is never
+// clobbered by a future automated pass.
+async function updateSentiment(id, { sentiment, severity, reason, relevant, category, category_confidence }) {
   await pool.query(
-    `UPDATE mentions SET sentiment = $2, severity = $3, sentiment_reason = $4, relevant = $5 WHERE id = $1`,
-    [id, sentiment || null, severity || null, reason || null, relevant === false ? false : true]
+    `UPDATE mentions
+     SET sentiment = $2, severity = $3, sentiment_reason = $4, relevant = $5,
+         category = $6, category_confidence = $7, category_source = 'ai'
+     WHERE id = $1`,
+    [
+      id,
+      sentiment || null,
+      severity || null,
+      reason || null,
+      relevant === false ? false : true,
+      category || null,
+      typeof category_confidence === 'number' ? category_confidence : null
+    ]
   );
 }
 
 async function markAlerted(id) {
   await pool.query(`UPDATE mentions SET alerted_at = now() WHERE id = $1`, [id]);
+}
+
+// Existing rows with no category yet (pre-dates this feature, or a prior
+// classification attempt failed) -- ordered by id so repeated calls with the
+// same limit naturally resume from where a failed run left off, since
+// already-classified rows drop out of the WHERE clause as they're done.
+async function getMentionsNeedingCategoryBackfill(limit = 50) {
+  const res = await pool.query(
+    `SELECT id, source, title, snippet FROM mentions WHERE category IS NULL ORDER BY id ASC LIMIT $1`,
+    [limit]
+  );
+  return res.rows;
+}
+
+// Rows the classifier already looked at but couldn't confidently categorize
+// -- for the "reclassify unclassified" action. Excludes manual overrides
+// (someone may have deliberately set category to 'unclassified').
+async function getUnclassifiedMentions(limit = 50) {
+  const res = await pool.query(
+    `SELECT id, source, title, snippet FROM mentions
+     WHERE category = 'unclassified' AND category_source IS DISTINCT FROM 'manual'
+     ORDER BY id ASC LIMIT $1`,
+    [limit]
+  );
+  return res.rows;
+}
+
+async function setManualCategory(id, category) {
+  await pool.query(
+    `UPDATE mentions SET category = $2, category_source = 'manual', category_confidence = NULL WHERE id = $1`,
+    [id, category]
+  );
 }
 
 // All negative mentions first seen on the current Melbourne calendar day,
@@ -105,7 +157,7 @@ async function markAlerted(id) {
 // own findings.
 async function getTodaysNegativeMentions() {
   const res = await pool.query(`
-    SELECT id, source, title, snippet, url, severity, sentiment_reason AS reason
+    SELECT id, source, title, snippet, url, severity, sentiment_reason AS reason, category
     FROM mentions
     WHERE sentiment = 'negative'
       AND relevant IS DISTINCT FROM false
@@ -122,5 +174,8 @@ module.exports = {
   insertMentions,
   updateSentiment,
   markAlerted,
-  getTodaysNegativeMentions
+  getTodaysNegativeMentions,
+  getMentionsNeedingCategoryBackfill,
+  getUnclassifiedMentions,
+  setManualCategory
 };

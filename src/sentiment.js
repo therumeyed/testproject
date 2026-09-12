@@ -1,6 +1,7 @@
 const ANTHROPIC_API_BASE = 'https://api.anthropic.com/v1/messages';
 const MODEL = process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001';
 const BATCH_SIZE = 20;
+const { CATEGORY_VALUES, CATEGORY_CONFIDENCE_THRESHOLD } = require('./categories');
 
 function buildPrompt(mentions) {
   const numbered = mentions
@@ -17,6 +18,16 @@ For each numbered item, return an object with:
 - "sentiment": judge sentiment SPECIFICALLY toward the airport/its services -- not the overall tone of the whole post. A post can be negative about something unrelated (weather, traffic, the writer's day, an emoji that isn't actually about the airport) while being neutral or positive about the airport itself, and vice versa -- only the airport-directed sentiment counts. Example: "back to cold weather in Melbourne lol, but I love this airport for its cheesecake" is POSITIVE (the weather complaint is irrelevant noise; the airport itself is explicitly praised). Classify by actual meaning and tone, not superficial cues like emojis or isolated words considered out of context -- e.g. "kind of a hassle now" is negative even with no explicit negative word, precisely because it's said *about the airport experience*, not because of tone alone. A neutral personal anecdote, lighthearted dilemma, or plain description (e.g. someone weighing dinner options, or an engagement-bait "say ok if you like X" post) is NEUTRAL -- do not infer an implied complaint unless the text actually expresses dissatisfaction. If "relevant" is false, just use "neutral".
 - "severity": only for relevant negative items -- "low" (mild dissatisfaction/minor gripe), "medium" (clear complaint), or "high" (strong anger, safety concern, explicit refund/legal/media-escalation threat, or a severe operational failure). null otherwise.
 - "reason": one short sentence, grounded ONLY in what this specific item's text actually says -- never reference an issue (parking, transport links, terminal navigation, etc.) that isn't literally present in this item's own text, even if it's a common theme in other items. If "relevant" is false, explain why (e.g. "refers to Melbourne, Florida's airport" or "post is about Sydney Airport, no Melbourne connection in the text"). Otherwise explain what specifically about the airport drove the sentiment classification.
+- "category": exactly one of these values, based on the author's MAIN issue or point of praise -- if several categories genuinely appear in the text, pick only the one that represents the primary point, not every category mentioned:
+  - "parking": airport parking, car parks, parking products, parking cost, availability, booking, entry/exit, shuttle from car park, valet.
+  - "pickup_dropoff": passenger pickup or drop-off, waiting zones, kerbside access, pickup/drop-off lanes, related wayfinding.
+  - "taxi_rideshare": taxi, Uber, DiDi, rideshare ranks, fares, driver experience, pickup location and wait time.
+  - "public_transport": SkyBus, buses, trains or proposed rail links, public-transport stops, fares and connections.
+  - "terminal_experience": security, queues, baggage, customs, toilets, food, shops, lounges, terminal navigation and accessibility inside the airport.
+  - "general_airport": whole-airport reputation or operational mentions that don't focus on one service category.
+  - "unclassified": not enough context to pick a category confidently, or "relevant" is false.
+  Judge category from what the text actually says, never from which platform/source it came from.
+- "category_confidence": your confidence in that category assignment, from 0 to 1.
 
 Items:
 ${numbered}
@@ -67,12 +78,24 @@ async function classifyBatch(mentions) {
       console.error(`[sentiment] no classification returned for item ${i} (mention id=${m.id}) -- skipping rather than guessing`);
       return;
     }
+
+    const confidence = typeof p.category_confidence === 'number' ? p.category_confidence : null;
+    const rawCategory = CATEGORY_VALUES.includes(p.category) ? p.category : 'unclassified';
+    // Downgrade to unclassified below the confidence threshold, but keep the
+    // raw confidence value stored either way -- distinguishes "confidently
+    // unclassified" from "guessed low-confidence, downgraded".
+    const category = (rawCategory !== 'unclassified' && confidence !== null && confidence < CATEGORY_CONFIDENCE_THRESHOLD)
+      ? 'unclassified'
+      : rawCategory;
+
     results.push({
       id: m.id,
       relevant: p.relevant !== false,
       sentiment: p.sentiment || null,
       severity: p.severity || null,
-      reason: p.reason || null
+      reason: p.reason || null,
+      category,
+      category_confidence: confidence
     });
   });
   return results;
