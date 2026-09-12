@@ -3,7 +3,8 @@ const express = require('express');
 const path = require('path');
 const { pool, initSchemaWithRetry, setManualCategory, getUnclassifiedMentions, updateCategory } = require('./db');
 const { classifyMentions } = require('./sentiment');
-const { CATEGORY_VALUES } = require('./categories');
+const { CATEGORIES, CATEGORY_VALUES } = require('./categories');
+const { parseFilters, buildWhere, previousPeriod } = require('./filters');
 
 const app = express();
 app.use(express.static(path.join(__dirname, '..', 'public')));
@@ -16,61 +17,170 @@ function requireAdmin(req, res, next) {
   next();
 }
 
+function melbourneDateString(date) {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Australia/Melbourne' }).format(date);
+}
+
+// Melbourne-calendar-day range covering [from, to], inclusive, as YYYY-MM-DD
+// strings -- used to zero-fill days with no mentions in the trend chart.
+function buildDayRange(from, to) {
+  const days = [];
+  const endStr = melbourneDateString(to);
+  const cursor = new Date(from);
+  let cursorStr = melbourneDateString(cursor);
+  // Guard against runaway loops (e.g. a malformed date range) -- a bounded
+  // reporting window has no legitimate reason to span this many days.
+  let guard = 0;
+  while (cursorStr <= endStr && guard < 3660) {
+    days.push(cursorStr);
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+    cursorStr = melbourneDateString(cursor);
+    guard++;
+  }
+  return days;
+}
+
 app.get('/health', (req, res) => res.json({ ok: true }));
 
 app.get('/api/mentions', async (req, res) => {
-  const days = Number(req.query.days) || 14;
-  const limit = Math.min(Number(req.query.limit) || 200, 1000);
-  const params = [days, limit];
-  // ?discarded=1 flips this to show only items marked irrelevant, for
-  // auditing what the relevance filter is catching (and why, via
-  // sentiment_reason) -- default view hides them everywhere else.
-  let where = req.query.discarded
-    ? `relevant = false`
-    : `relevant IS DISTINCT FROM false`;
-  where += ` AND first_seen_at >= now() - ($1 || ' days')::interval`;
+  const filters = parseFilters(req.query);
+  const { where, params } = buildWhere(filters, filters.from, filters.to);
 
-  if (req.query.source) {
-    params.push(req.query.source);
-    where += ` AND source = $${params.length}`;
-  }
-  if (req.query.sentiment) {
-    params.push(req.query.sentiment);
-    where += ` AND sentiment = $${params.length}`;
-  }
+  const page = Math.max(1, Number(req.query.page) || 1);
+  const pageSize = Math.min(Math.max(Number(req.query.pageSize) || 20, 1), 200);
+  const offset = (page - 1) * pageSize;
 
-  const result = await pool.query(
-    `SELECT id, source, url, title, snippet, author, posted_at, first_seen_at, sentiment, severity, sentiment_reason
+  const countRes = await pool.query(`SELECT count(*)::int AS total FROM mentions WHERE ${where}`, params);
+  const dataParams = [...params, pageSize, offset];
+  const dataRes = await pool.query(
+    `SELECT id, source, url, title, snippet, author, posted_at, first_seen_at,
+            sentiment, severity, sentiment_reason,
+            COALESCE(category, 'unclassified') AS category, category_confidence, category_source
      FROM mentions WHERE ${where}
-     ORDER BY first_seen_at DESC LIMIT $2`,
-    params
+     ORDER BY first_seen_at DESC
+     LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
+    dataParams
   );
-  res.json(result.rows);
+  res.json({ total: countRes.rows[0].total, page, pageSize, results: dataRes.rows });
 });
 
-app.get('/api/stats', async (req, res) => {
-  const days = Number(req.query.days) || 14;
-  const result = await pool.query(
-    `SELECT source, date_trunc('day', first_seen_at) AS day, count(*)::int AS count
-     FROM mentions
-     WHERE first_seen_at >= now() - ($1 || ' days')::interval AND relevant IS DISTINCT FROM false
-     GROUP BY source, day
-     ORDER BY day ASC`,
-    [days]
-  );
-  res.json(result.rows);
-});
+// Powers every KPI card, the trend chart, and the category bars from one
+// consistent, server-side-filtered dataset -- never derived by filtering
+// only the visible page of table results.
+app.get('/api/analytics', async (req, res) => {
+  const filters = parseFilters(req.query);
+  const { where, params } = buildWhere(filters, filters.from, filters.to);
+  const prev = previousPeriod(filters.from, filters.to);
+  const { where: prevWhere, params: prevParams } = buildWhere(filters, prev.from, prev.to);
 
-app.get('/api/sentiment-stats', async (req, res) => {
-  const days = Number(req.query.days) || 14;
-  const result = await pool.query(
-    `SELECT COALESCE(sentiment, 'unclassified') AS sentiment, count(*)::int AS count
-     FROM mentions
-     WHERE first_seen_at >= now() - ($1 || ' days')::interval AND relevant IS DISTINCT FROM false
-     GROUP BY sentiment`,
-    [days]
-  );
-  res.json(result.rows);
+  const [totalRes, categoryRes, sourceRes, dayRes, categoryNegRes, prevTotalRes, prevSentimentRes, prevCategoryNegRes] = await Promise.all([
+    pool.query(`SELECT count(*)::int AS total FROM mentions WHERE ${where}`, params),
+    pool.query(
+      `SELECT COALESCE(category, 'unclassified') AS category, count(*)::int AS count
+       FROM mentions WHERE ${where} GROUP BY 1`,
+      params
+    ),
+    pool.query(
+      `SELECT source, count(*)::int AS count FROM mentions WHERE ${where} GROUP BY 1 ORDER BY 2 DESC`,
+      params
+    ),
+    pool.query(
+      `SELECT (first_seen_at AT TIME ZONE 'Australia/Melbourne')::date AS day,
+              COALESCE(sentiment, 'unclassified') AS sentiment, count(*)::int AS count
+       FROM mentions WHERE ${where} GROUP BY 1, 2 ORDER BY 1 ASC`,
+      params
+    ),
+    pool.query(
+      `SELECT COALESCE(category, 'unclassified') AS category, count(*)::int AS count
+       FROM mentions WHERE ${where} AND sentiment = 'negative' GROUP BY 1`,
+      params
+    ),
+    pool.query(`SELECT count(*)::int AS total FROM mentions WHERE ${prevWhere}`, prevParams),
+    pool.query(
+      `SELECT COALESCE(sentiment, 'unclassified') AS sentiment, count(*)::int AS count
+       FROM mentions WHERE ${prevWhere} GROUP BY 1`,
+      prevParams
+    ),
+    pool.query(
+      `SELECT COALESCE(category, 'unclassified') AS category, count(*)::int AS count
+       FROM mentions WHERE ${prevWhere} AND sentiment = 'negative' GROUP BY 1`,
+      prevParams
+    )
+  ]);
+
+  const total = totalRes.rows[0].total;
+
+  // Sentiment totals for the period, derived from the same day x sentiment
+  // rows the time series uses -- guarantees these reconcile with each other
+  // by construction rather than by two separately-written queries agreeing.
+  const sentimentTotals = { positive: 0, neutral: 0, negative: 0, unclassified: 0 };
+  const byDay = new Map();
+  for (const row of dayRes.rows) {
+    const day = row.day.toISOString().slice(0, 10);
+    const key = ['positive', 'neutral', 'negative'].includes(row.sentiment) ? row.sentiment : 'unclassified';
+    sentimentTotals[key] += row.count;
+    if (!byDay.has(day)) byDay.set(day, { positive: 0, neutral: 0, negative: 0, unclassified: 0 });
+    byDay.get(day)[key] += row.count;
+  }
+
+  const pct = (n) => (total > 0 ? Math.round((n / total) * 1000) / 10 : 0);
+  const sentiment = {
+    positive: { count: sentimentTotals.positive, pct: pct(sentimentTotals.positive) },
+    neutral: { count: sentimentTotals.neutral, pct: pct(sentimentTotals.neutral) },
+    negative: { count: sentimentTotals.negative, pct: pct(sentimentTotals.negative) },
+    unclassified: { count: sentimentTotals.unclassified, pct: pct(sentimentTotals.unclassified) }
+  };
+
+  const categories = CATEGORIES.map((c) => ({
+    category: c.value,
+    label: c.label,
+    count: categoryRes.rows.find((r) => r.category === c.value)?.count || 0
+  }));
+
+  const todayStr = melbourneDateString(new Date());
+  const dayRange = buildDayRange(filters.from, filters.to);
+  const timeSeries = dayRange.map((day) => {
+    const d = byDay.get(day) || { positive: 0, neutral: 0, negative: 0, unclassified: 0 };
+    const dayTotal = d.positive + d.neutral + d.negative + d.unclassified;
+    return { day, total: dayTotal, positive: d.positive, neutral: d.neutral, negative: d.negative, partial: day === todayStr };
+  });
+
+  const prevSentimentTotals = { positive: 0, neutral: 0, negative: 0, unclassified: 0 };
+  for (const row of prevSentimentRes.rows) {
+    const key = ['positive', 'neutral', 'negative'].includes(row.sentiment) ? row.sentiment : 'unclassified';
+    prevSentimentTotals[key] += row.count;
+  }
+  const prevTotal = prevTotalRes.rows[0].total;
+  const prevPct = (n) => (prevTotal > 0 ? Math.round((n / prevTotal) * 1000) / 10 : 0);
+
+  res.json({
+    period: { from: filters.from.toISOString(), to: filters.to.toISOString(), days: filters.days },
+    total,
+    sentiment,
+    categories,
+    bySource: sourceRes.rows,
+    timeSeries,
+    negativeByCategory: CATEGORIES.map((c) => ({
+      category: c.value,
+      label: c.label,
+      count: categoryNegRes.rows.find((r) => r.category === c.value)?.count || 0
+    })),
+    previousPeriod: {
+      total: prevTotal,
+      totalChangePct: prevTotal > 0 ? Math.round(((total - prevTotal) / prevTotal) * 1000) / 10 : null,
+      sentiment: {
+        positive: { count: prevSentimentTotals.positive, pct: prevPct(prevSentimentTotals.positive) },
+        neutral: { count: prevSentimentTotals.neutral, pct: prevPct(prevSentimentTotals.neutral) },
+        negative: { count: prevSentimentTotals.negative, pct: prevPct(prevSentimentTotals.negative) },
+        unclassified: { count: prevSentimentTotals.unclassified, pct: prevPct(prevSentimentTotals.unclassified) }
+      },
+      negativeByCategory: CATEGORIES.map((c) => ({
+        category: c.value,
+        label: c.label,
+        count: prevCategoryNegRes.rows.find((r) => r.category === c.value)?.count || 0
+      }))
+    }
+  });
 });
 
 // Manual data-reset utility for use during tuning -- gated on ADMIN_TOKEN so
