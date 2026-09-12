@@ -9,7 +9,8 @@
   "scripts": {
     "start": "node src/server.js",
     "ingest": "node src/ingest.js",
-    "backfill-categories": "node src/backfillCategories.js"
+    "backfill-categories": "node src/backfillCategories.js",
+    "test": "node --test"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
