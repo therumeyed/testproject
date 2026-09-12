@@ -6,270 +6,222 @@
 <title>Melbourne Airport Mentions</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <style>
-  :root {
-    --bg: #f8fafc;
-    --panel: #ffffff;
-    --border: #e2e8f0;
-    --text: #0f172a;
-    --muted: #64748b;
-    --accent: #2563eb;
+  :root{--navy:#071d49;--blue:#1467e8;--sky:#eaf3ff;--ink:#162033;--muted:#68758a;--line:#dfe5ee;--bg:#f4f7fb;--card:#fff;--green:#14804a;--red:#c43d3d;--amber:#a96408;--purple:#7257d5;--radius:14px}
+  *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.4 Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+  [hidden]{display:none!important}
+  button,select,input{font:inherit}
+  a{color:inherit}
+  .shell{display:grid;grid-template-columns:228px 1fr;min-height:100vh}
+  .sidebar{background:var(--navy);color:#fff;padding:24px 16px;display:flex;flex-direction:column;gap:28px}
+  .brand{display:flex;align-items:center;gap:10px;padding:0 8px;font-weight:750;font-size:17px}
+  .brandmark{display:grid;place-items:center;width:31px;height:31px;border-radius:9px;background:#fff;color:var(--navy);font-size:13px}
+  .client{margin:0 8px;padding:12px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.12);border-radius:10px}
+  .client small{display:block;color:#b8c6e1;margin-bottom:4px}
+  .nav{display:grid;gap:6px}
+  .nav a{color:#c9d4e7;text-decoration:none;padding:10px 12px;border-radius:8px;cursor:pointer}
+  .nav a.active{background:#fff;color:var(--navy);font-weight:700}
+  .nav a:hover{background:rgba(255,255,255,.09);color:#fff}
+  .nav a.active:hover{color:var(--navy)}
+  .sync{margin-top:auto;padding:12px;color:#c9d4e7;font-size:12px}
+  .dot{display:inline-block;width:7px;height:7px;background:#4bd28c;border-radius:50%;margin-right:6px}
+  main{min-width:0}
+  .topbar{min-height:72px;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:14px 30px;flex-wrap:wrap;gap:10px}
+  .title h1{font-size:21px;margin:0 0 2px}
+  .title p{margin:0;color:var(--muted);font-size:12px}
+  .topactions{display:flex;gap:9px}
+  .btn{border:1px solid var(--line);background:#fff;border-radius:8px;padding:9px 12px;color:var(--ink);cursor:pointer}
+  .btn.primary{background:var(--blue);color:#fff;border-color:var(--blue)}
+  .content{max-width:1500px;margin:auto;padding:22px 30px 40px}
+  .filters{background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:14px;display:grid;grid-template-columns:1.4fr repeat(4,minmax(130px,.7fr)) auto;gap:10px;align-items:end;box-shadow:0 1px 2px rgba(18,39,75,.03)}
+  .field label{display:block;color:var(--muted);font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;margin:0 0 5px}
+  .control{width:100%;height:38px;border:1px solid var(--line);border-radius:8px;background:#fff;padding:0 10px;color:var(--ink)}
+  .search{position:relative}
+  .search input{padding-left:32px}
+  .search:before{content:'⌕';position:absolute;left:11px;bottom:6px;font-size:19px;color:var(--muted)}
+  .clear{height:38px;border:0;background:transparent;color:var(--blue);font-weight:650;cursor:pointer}
+  .active-filter{display:none;margin:10px 0 0;flex-wrap:wrap}
+  .active-filter.show{display:flex;gap:7px;align-items:center;color:var(--muted);font-size:12px}
+  .chip{display:inline-flex;align-items:center;gap:5px;border:1px solid #b8d3fa;background:var(--sky);color:#0d55bb;border-radius:999px;padding:5px 9px;font-weight:650}
+  .chip button{border:0;background:transparent;color:inherit;cursor:pointer;font-weight:800;padding:0;line-height:1}
+  .kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin:18px 0}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:0 1px 2px rgba(18,39,75,.03)}
+  .kpi{padding:16px}
+  .kpi .label{color:var(--muted);font-size:12px;font-weight:650}
+  .kpi .value{font-size:26px;font-weight:760;margin:6px 0 2px;letter-spacing:-.03em}
+  .delta{font-size:12px;color:var(--muted)}
+  .up{color:var(--green)}
+  .down{color:var(--red)}
+  .grid{display:grid;grid-template-columns:minmax(0,1.8fr) minmax(310px,.8fr);gap:14px}
+  .panelhead{display:flex;align-items:flex-start;justify-content:space-between;padding:17px 18px 4px;gap:10px;flex-wrap:wrap}
+  .panelhead h2{font-size:15px;margin:0 0 3px}
+  .panelhead p{font-size:12px;color:var(--muted);margin:0}
+  .seg{display:flex;border:1px solid var(--line);border-radius:8px;padding:2px}
+  .seg button{border:0;background:transparent;padding:6px 9px;border-radius:6px;color:var(--muted);font-size:12px;cursor:pointer}
+  .seg button.on{background:var(--sky);color:var(--blue);font-weight:700}
+  .chart{padding:8px 18px 17px}
+  .chart-wrap{position:relative;height:260px}
+  .chart-unavailable{display:flex;align-items:center;justify-content:center;height:100%;color:var(--muted);font-size:13px;margin:0}
+  .categories{padding:10px 18px 17px}
+  .catrow{display:grid;grid-template-columns:minmax(116px,1.35fr) 2.4fr 42px;gap:9px;align-items:center;margin:13px 0;font-size:12px;cursor:pointer;background:none;border:0;width:100%;text-align:left;color:inherit;padding:0}
+  .catrow strong{font-weight:650}
+  .catrow.active strong{color:var(--blue)}
+  .bar{height:8px;border-radius:999px;background:#edf1f6;overflow:hidden}
+  .bar i{display:block;height:100%;border-radius:inherit}
+  .category-note{background:#f8fafc;border-top:1px solid var(--line);padding:12px 18px;color:var(--muted);font-size:12px;border-radius:0 0 var(--radius) var(--radius)}
+  .mentions{margin-top:14px}
+  .mentions-top{padding:17px 18px 12px;display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap}
+  .mentions-top h2{font-size:15px;margin:0}
+  .count{color:var(--muted);font-size:12px;margin-left:6px}
+  .viewtoggle{display:flex;gap:5px}
+  .viewtoggle button{border:1px solid var(--line);background:#fff;border-radius:7px;padding:7px 10px;color:var(--muted);cursor:pointer}
+  .viewtoggle button.on{color:var(--blue);border-color:#a9c9f8;background:var(--sky)}
+  .tablewrap{overflow:auto}
+  table{width:100%;border-collapse:collapse;min-width:1040px}
+  th{text-align:left;padding:9px 16px;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.05em;background:#fafbfd;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+  td{padding:12px 16px;border-bottom:1px solid #ebeff4;vertical-align:top}
+  .density-compact td{padding:6px 16px;font-size:12.5px}
+  tbody tr:hover{background:#f9fbfe}
+  .source{font-weight:680}
+  .sub{display:block;color:var(--muted);font-size:11px;margin-top:3px}
+  .mention-title{font-weight:700;color:#14274d;margin-bottom:3px}
+  .snippet{color:#566276;font-size:12px;max-width:590px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .pill{display:inline-flex;align-items:center;border-radius:999px;padding:4px 8px;font-size:11px;font-weight:700;white-space:nowrap;border:0;cursor:pointer;font:inherit}
+  .confidence{font-variant-numeric:tabular-nums;color:var(--muted)}
+  .actions a{color:var(--blue);font-weight:700;cursor:pointer;text-decoration:none}
+  .footerline{display:flex;justify-content:space-between;align-items:center;padding:13px 16px;color:var(--muted);font-size:12px;flex-wrap:wrap;gap:8px}
+  .pager button{border:1px solid var(--line);background:#fff;padding:6px 9px;border-radius:6px;margin-left:4px;cursor:pointer;min-width:32px}
+  .pager button.on{background:var(--navy);color:#fff}
+  .pager button:disabled{opacity:.4;cursor:not-allowed}
+  .empty,.loading{padding:34px;text-align:center;color:var(--muted)}
+  .skel{background:linear-gradient(90deg,#eef1f6 25%,#e4e9f0 37%,#eef1f6 63%);background-size:400% 100%;animation:sk 1.4s ease infinite;border-radius:6px}
+  @keyframes sk{0%{background-position:100% 50%}100%{background-position:0 50%}}
+  .catselect{border:1px solid var(--line);border-radius:6px;padding:3px 6px;font-size:11px}
+  .visually-hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap}
+  a:focus-visible,button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+  .cards-mobile{display:none}
+  @media(max-width:1100px){.shell{grid-template-columns:72px 1fr}.brand span,.client,.nav a span,.sync span{display:none}.nav a{text-align:center}.filters{grid-template-columns:repeat(3,1fr)}.kpis{grid-template-columns:repeat(3,1fr)}.grid{grid-template-columns:1fr}}
+  @media(max-width:720px){
+    .shell{display:block}.sidebar{display:none}.topbar{padding:12px 16px}.content{padding:14px 14px 30px}
+    .filters{grid-template-columns:1fr 1fr}.search{grid-column:1/-1}.kpis{grid-template-columns:1fr 1fr}.kpi:last-child{grid-column:1/-1}
+    .topactions .btn:first-child{display:none}
+    .tablewrap{display:none}
+    .cards-mobile{display:block}
   }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #0b1220;
-      --panel: #131b2c;
-      --border: #223049;
-      --text: #e5edf9;
-      --muted: #93a4bd;
-      --accent: #5b8cff;
-    }
-  }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    background: var(--bg);
-    color: var(--text);
-  }
-  header {
-    padding: 24px 32px 8px;
-  }
-  header h1 { margin: 0 0 4px; font-size: 22px; }
-  header p { margin: 0; color: var(--muted); font-size: 14px; }
-  main { padding: 16px 32px 48px; max-width: 1200px; margin: 0 auto; }
-
-  .tiles {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-    gap: 12px;
-    margin: 16px 0 24px;
-  }
-  .tile {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 14px 16px;
-  }
-  .tile .value { font-size: 26px; font-weight: 600; }
-  .tile .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
-
-  .panel {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 16px;
-    margin-bottom: 24px;
-  }
-  .panel h2 { margin: 0 0 12px; font-size: 15px; }
-  .chart-wrap { position: relative; height: 260px; }
-
-  .controls { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
-  select {
-    background: var(--bg);
-    color: var(--text);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 6px 10px;
-    font-size: 13px;
-  }
-
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
-  th { color: var(--muted); font-weight: 500; font-size: 12px; text-transform: uppercase; }
-  td.source { white-space: nowrap; }
-  .badge {
-    display: inline-block;
-    padding: 2px 8px;
-    border-radius: 999px;
-    font-size: 11px;
-    color: white;
-    white-space: nowrap;
-  }
-  a { color: var(--accent); text-decoration: none; }
-  a:hover { text-decoration: underline; }
-  .empty { color: var(--muted); padding: 24px; text-align: center; }
-  .mention-link { color: inherit; text-decoration: none; display: block; }
-  .mention-link:hover .mention-title { text-decoration: underline; }
-  .mention-title { font-weight: 600; color: var(--accent); margin-bottom: 2px; }
-  .mention-snippet { color: var(--text); font-size: 12.5px; line-height: 1.4; }
-  .mention-reason { color: var(--muted); font-size: 11.5px; font-style: italic; margin-top: 4px; }
 </style>
 </head>
 <body>
-<header>
-  <h1>Melbourne Airport Mentions</h1>
-  <p>Reddit, YouTube, web/Facebook/Instagram/LinkedIn search results, and MelAir's own Facebook/Instagram comments. Updated daily.</p>
-</header>
-<main>
-  <div class="tiles" id="sentimentTiles"></div>
-  <div class="tiles" id="tiles"></div>
+<div class="shell">
+  <aside class="sidebar">
+    <div class="brand"><div class="brandmark">BA</div><span>Brand Assistant</span></div>
+    <div class="client"><small>Tracking workspace</small><strong>Melbourne Airport</strong></div>
+    <nav class="nav" aria-label="Main navigation" id="mainNav">
+      <a data-view="overview" href="#"><span>Overview</span></a>
+      <a data-view="mentions" href="#"><span>Mentions</span></a>
+      <a data-view="categories" href="#"><span>Categories</span></a>
+      <a data-view="sources" href="#"><span>Sources</span></a>
+      <a data-view="settings" href="#"><span>Settings</span></a>
+    </nav>
+    <div class="sync"><span class="dot"></span><span id="syncStatus">Loading…</span></div>
+  </aside>
+  <main>
+    <header class="topbar">
+      <div class="title"><h1>Melbourne Airport mentions</h1><p>Daily conversation and review intelligence across tracked sources</p></div>
+      <div class="topactions">
+        <button class="btn" id="exportBtn" type="button">Export</button>
+        <button class="btn primary" id="reviewUnclassifiedBtn" type="button">Review unclassified <span id="reviewCount">0</span></button>
+      </div>
+    </header>
+    <div class="content">
 
-  <div class="panel">
-    <h2>Mentions per day by source</h2>
-    <div class="chart-wrap"><canvas id="chart"></canvas></div>
-  </div>
+      <section class="filters" aria-label="Dashboard filters">
+        <div class="field search"><label for="search">Search mentions</label><input class="control" id="search" placeholder="Search title, comment or author" /></div>
+        <div class="field"><label for="category">Category</label>
+          <select class="control" id="category">
+            <option value="all">All categories</option>
+            <option value="parking">Parking</option>
+            <option value="pickup_dropoff">Pick-up &amp; drop-off</option>
+            <option value="taxi_rideshare">Taxi &amp; rideshare</option>
+            <option value="public_transport">Public transport</option>
+            <option value="terminal_experience">Terminal experience</option>
+            <option value="general_airport">General airport</option>
+            <option value="unclassified">Unclassified</option>
+          </select>
+        </div>
+        <div class="field"><label for="sentiment">Sentiment</label>
+          <select class="control" id="sentiment">
+            <option value="all">All sentiment</option>
+            <option value="positive">Positive</option>
+            <option value="neutral">Neutral</option>
+            <option value="negative">Negative</option>
+          </select>
+        </div>
+        <div class="field"><label for="source">Source</label><select class="control" id="source"><option value="all">All sources</option></select></div>
+        <div class="field"><label for="period">Date range</label>
+          <select class="control" id="period">
+            <option value="14">Last 14 days</option>
+            <option value="30">Last 30 days</option>
+            <option value="90">Last 90 days</option>
+          </select>
+        </div>
+        <button class="clear" id="clearBtn" type="button">Clear</button>
+      </section>
+      <div class="active-filter" id="activeFilter" aria-live="polite"></div>
 
-  <div class="panel">
-    <div class="controls">
-      <h2 style="margin:0; flex:1;">Recent mentions</h2>
-      <select id="sourceFilter">
-        <option value="">All sources</option>
-      </select>
-      <select id="sentimentFilter">
-        <option value="">All sentiment</option>
-        <option value="negative">Negative only</option>
-        <option value="neutral">Neutral only</option>
-        <option value="positive">Positive only</option>
-      </select>
-      <select id="daysFilter">
-        <option value="7">Last 7 days</option>
-        <option value="14" selected>Last 14 days</option>
-        <option value="30">Last 30 days</option>
-      </select>
+      <section class="kpis" aria-label="Key metrics" id="kpis">
+        <article class="card kpi"><div class="label">Total mentions</div><div class="value" id="kpiTotal">–</div><div class="delta" id="kpiTotalDelta"></div></article>
+        <article class="card kpi"><div class="label">Positive sentiment</div><div class="value" id="kpiPositive">–</div><div class="delta" id="kpiPositiveDelta"></div></article>
+        <article class="card kpi"><div class="label">Negative sentiment</div><div class="value" id="kpiNegative">–</div><div class="delta" id="kpiNegativeDelta"></div></article>
+        <article class="card kpi"><div class="label">Largest conversation</div><div class="value" id="kpiLargest" style="font-size:21px">–</div><div class="delta" id="kpiLargestDelta"></div></article>
+        <article class="card kpi"><div class="label">Needs classification</div><div class="value" id="kpiUnclassified">–</div><div class="delta" id="kpiUnclassifiedDelta"></div></article>
+      </section>
+
+      <section class="grid" id="overviewGrid">
+        <article class="card">
+          <div class="panelhead"><div><h2>Conversation trend</h2><p>Daily mention volume with negative mentions overlaid</p></div>
+            <div class="seg" role="group" aria-label="Trend view"><button class="on" data-trend="volume" type="button">Volume</button><button data-trend="sentiment" type="button">Sentiment</button></div>
+          </div>
+          <div class="chart"><div class="chart-wrap"><canvas id="trendChart"></canvas></div></div>
+        </article>
+        <article class="card">
+          <div class="panelhead"><div><h2>Mentions by category</h2><p>Share of conversation in this period</p></div></div>
+          <div class="categories" id="categoryBars"></div>
+          <div class="category-note" id="watchNote" hidden></div>
+        </article>
+      </section>
+
+      <section class="card mentions" id="mentionsSection">
+        <div class="mentions-top">
+          <div><h2 id="mentionsTitle">Recent mentions</h2><span class="count" id="visibleCount"></span></div>
+          <button class="btn" id="reclassifyBtn" type="button" hidden>Reclassify unclassified</button>
+          <div class="viewtoggle" role="group" aria-label="Table density"><button class="on" data-density="comfortable" type="button">Comfortable</button><button data-density="compact" type="button">Compact</button></div>
+        </div>
+        <div class="tablewrap">
+          <table>
+            <thead><tr><th>Source / date</th><th>Category</th><th>Sentiment</th><th>Mention</th><th>Author</th><th>Confidence</th><th><span class="visually-hidden">Open</span></th></tr></thead>
+            <tbody id="mentionRows"></tbody>
+          </table>
+        </div>
+        <div class="cards-mobile" id="mentionCards"></div>
+        <div class="empty" id="mentionsEmpty" hidden>No mentions match these filters.</div>
+        <div class="footerline">
+          <span id="pagerSummary"></span>
+          <div class="pager" id="pager"></div>
+        </div>
+      </section>
+
+      <section class="card" id="sourcesSection" hidden style="padding:17px 18px;">
+        <h2 style="font-size:15px;margin:0 0 12px;">Mentions by source</h2>
+        <div id="sourceBars"></div>
+      </section>
+
+      <section class="card" id="settingsSection" hidden style="padding:17px 18px;">
+        <h2 style="font-size:15px;margin:0 0 8px;">Settings</h2>
+        <p style="color:var(--muted);font-size:13px;">Admin actions (manual category correction, reclassifying unclassified mentions) require the workspace admin token, entered inline when you use them. No other configuration is needed here yet.</p>
+      </section>
+
     </div>
-    <table id="table">
-      <thead>
-        <tr><th>Source</th><th>Sentiment</th><th>First seen</th><th>Title / snippet</th><th>Author</th></tr>
-      </thead>
-      <tbody></tbody>
-    </table>
-    <div class="empty" id="empty" style="display:none;">No mentions in this window yet.</div>
-  </div>
-</main>
-
-<script>
-const SOURCE_META = {
-  reddit:            { label: 'Reddit',              color: '#ea580c' },
-  youtube:           { label: 'YouTube',              color: '#dc2626' },
-  facebook_search:   { label: 'Facebook (search)',    color: '#2563eb' },
-  instagram_search:  { label: 'Instagram (search)',   color: '#7c3aed' },
-  linkedin_search:   { label: 'LinkedIn (search)',    color: '#0ea5e9' },
-  web_search:        { label: 'Web',                  color: '#16a34a' },
-  news_search:       { label: 'News',                 color: '#0d9488' },
-  facebook_direct:   { label: 'Facebook (direct)',    color: '#1e40af' },
-  instagram_direct:  { label: 'Instagram (hashtag)',  color: '#db2777' },
-  google_reviews:    { label: 'Google reviews',       color: '#eab308' },
-  facebook_own:      { label: 'Facebook (MelAir)',    color: '#0891b2' },
-  instagram_own:     { label: 'Instagram (MelAir)',   color: '#c026d3' }
-};
-function meta(source) {
-  return SOURCE_META[source] || { label: source, color: '#6b7280' };
-}
-
-const SENTIMENT_META = {
-  negative:     { label: 'Negative',     color: '#dc2626' },
-  neutral:      { label: 'Neutral',      color: '#6b7280' },
-  positive:     { label: 'Positive',     color: '#16a34a' },
-  unclassified: { label: 'Unclassified', color: '#cbd5e1' }
-};
-function sentimentMeta(s) {
-  return SENTIMENT_META[s || 'unclassified'] || SENTIMENT_META.unclassified;
-}
-
-let chart;
-
-async function loadSentimentStats(days) {
-  const res = await fetch(`/api/sentiment-stats?days=${days}`);
-  const rows = await res.json();
-  const tiles = rows.map(r => ({ label: sentimentMeta(r.sentiment).label, value: r.count, color: sentimentMeta(r.sentiment).color }));
-  document.getElementById('sentimentTiles').innerHTML = tiles.map(t =>
-    `<div class="tile"><div class="value" style="color:${t.color}">${t.value}</div><div class="label">${t.label}</div></div>`
-  ).join('');
-}
-
-async function loadStats(days) {
-  const res = await fetch(`/api/stats?days=${days}`);
-  const rows = await res.json();
-
-  const days_ = [...new Set(rows.map(r => r.day.slice(0, 10)))].sort();
-  const sources = [...new Set(rows.map(r => r.source))];
-
-  const datasets = sources.map(source => ({
-    label: meta(source).label,
-    backgroundColor: meta(source).color,
-    data: days_.map(d => {
-      const match = rows.find(r => r.source === source && r.day.slice(0, 10) === d);
-      return match ? match.count : 0;
-    })
-  }));
-
-  const ctx = document.getElementById('chart').getContext('2d');
-  if (chart) chart.destroy();
-  chart = new Chart(ctx, {
-    type: 'bar',
-    data: { labels: days_, datasets },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true, ticks: { precision: 0 } } },
-      plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 11 } } } }
-    }
-  });
-
-  const total = rows.reduce((sum, r) => sum + r.count, 0);
-  const bySource = {};
-  rows.forEach(r => { bySource[r.source] = (bySource[r.source] || 0) + r.count; });
-  const tiles = [{ label: `Last ${days} days`, value: total }]
-    .concat(Object.entries(bySource).map(([source, count]) => ({ label: meta(source).label, value: count })));
-  document.getElementById('tiles').innerHTML = tiles.map(t =>
-    `<div class="tile"><div class="value">${t.value}</div><div class="label">${t.label}</div></div>`
-  ).join('');
-
-  const filter = document.getElementById('sourceFilter');
-  const current = filter.value;
-  filter.innerHTML = '<option value="">All sources</option>' +
-    sources.map(s => `<option value="${s}">${meta(s).label}</option>`).join('');
-  filter.value = current;
-}
-
-async function loadMentions(days, source, sentiment) {
-  const params = new URLSearchParams({ days });
-  if (source) params.set('source', source);
-  if (sentiment) params.set('sentiment', sentiment);
-  const res = await fetch(`/api/mentions?${params}`);
-  const rows = await res.json();
-
-  const tbody = document.querySelector('#table tbody');
-  document.getElementById('empty').style.display = rows.length ? 'none' : 'block';
-  tbody.innerHTML = rows.map(r => {
-    const m = meta(r.source);
-    const sm = sentimentMeta(r.sentiment);
-    const when = new Date(r.first_seen_at).toLocaleString('en-AU', { timeZone: 'Australia/Melbourne' });
-    const titleHtml = r.title ? `<div class="mention-title">${escapeHtml(r.title)}</div>` : '';
-    const snippetText = r.snippet ? (r.snippet.length > 220 ? r.snippet.slice(0, 220) + '…' : r.snippet) : '';
-    const snippetHtml = snippetText ? `<div class="mention-snippet">${escapeHtml(snippetText)}</div>` : '';
-    const reasonHtml = r.sentiment_reason ? `<div class="mention-reason" title="${escapeHtml(r.sentiment_reason)}">${escapeHtml(r.sentiment_reason)}</div>` : '';
-    const body = titleHtml + snippetHtml + reasonHtml || '(no text)';
-    const link = r.url ? `<a href="${r.url}" target="_blank" rel="noopener" class="mention-link">${body}</a>` : body;
-    const severityLabel = r.severity ? ` (${r.severity})` : '';
-    return `<tr>
-      <td class="source"><span class="badge" style="background:${m.color}">${m.label}</span></td>
-      <td><span class="badge" style="background:${sm.color}">${sm.label}${severityLabel}</span></td>
-      <td>${when}</td>
-      <td>${link}</td>
-      <td>${r.author ? escapeHtml(r.author) : '—'}</td>
-    </tr>`;
-  }).join('');
-}
-
-function escapeHtml(str) {
-  return String(str).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
-}
-
-async function refresh() {
-  const days = document.getElementById('daysFilter').value;
-  const source = document.getElementById('sourceFilter').value;
-  const sentiment = document.getElementById('sentimentFilter').value;
-  await loadStats(days);
-  await loadSentimentStats(days);
-  document.getElementById('sourceFilter').value = source;
-  await loadMentions(days, source, sentiment);
-}
-
-document.getElementById('sourceFilter').addEventListener('change', refresh);
-document.getElementById('sentimentFilter').addEventListener('change', refresh);
-document.getElementById('daysFilter').addEventListener('change', refresh);
-refresh();
-</script>
+  </main>
+</div>
+<script src="app.js"></script>
 </body>
 </html>
