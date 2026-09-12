@@ -8,7 +8,8 @@
   },
   "scripts": {
     "start": "node src/server.js",
-    "ingest": "node src/ingest.js"
+    "ingest": "node src/ingest.js",
+    "backfill-categories": "node src/backfillCategories.js"
   },
   "dependencies": {
     "dotenv": "^16.4.5",

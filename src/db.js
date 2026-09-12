@@ -119,14 +119,28 @@ async function markAlerted(id) {
   await pool.query(`UPDATE mentions SET alerted_at = now() WHERE id = $1`, [id]);
 }
 
+// Backfill-only write path -- deliberately narrower than updateSentiment()
+// so re-categorizing an old mention never touches its existing
+// sentiment/severity/relevant, which may already have been reviewed/acted on.
+async function updateCategory(id, { category, category_confidence }) {
+  await pool.query(
+    `UPDATE mentions SET category = $2, category_confidence = $3, category_source = 'ai' WHERE id = $1`,
+    [id, category || null, typeof category_confidence === 'number' ? category_confidence : null]
+  );
+}
+
 // Existing rows with no category yet (pre-dates this feature, or a prior
-// classification attempt failed) -- ordered by id so repeated calls with the
-// same limit naturally resume from where a failed run left off, since
-// already-classified rows drop out of the WHERE clause as they're done.
-async function getMentionsNeedingCategoryBackfill(limit = 50) {
+// classification attempt failed). Cursor-based (afterId) rather than a bare
+// "WHERE category IS NULL LIMIT N" repeated query -- if any item in a page
+// fails to classify and stays NULL, a stateless query would return that same
+// stuck page forever. Advancing past the highest id seen each page
+// guarantees forward progress through the table within one run; a fresh
+// invocation (afterId back to 0) is what actually retries anything still
+// NULL, which is the intended "resume after failure" behaviour.
+async function getMentionsNeedingCategoryBackfill(limit = 50, afterId = 0) {
   const res = await pool.query(
-    `SELECT id, source, title, snippet FROM mentions WHERE category IS NULL ORDER BY id ASC LIMIT $1`,
-    [limit]
+    `SELECT id, source, title, snippet FROM mentions WHERE category IS NULL AND id > $2 ORDER BY id ASC LIMIT $1`,
+    [limit, afterId]
   );
   return res.rows;
 }
@@ -177,5 +191,6 @@ module.exports = {
   getTodaysNegativeMentions,
   getMentionsNeedingCategoryBackfill,
   getUnclassifiedMentions,
-  setManualCategory
+  setManualCategory,
+  updateCategory
 };
