@@ -2,6 +2,7 @@ require('dotenv').config();
 const { pool, initSchemaWithRetry, insertMentions, updateSentiment, markAlerted, getTodaysNegativeMentions } = require('./db');
 const { classifyMentions } = require('./sentiment');
 const { sendEmail } = require('./email');
+const { renderUrgentAlert, renderDailyDigest } = require('./emailTemplates');
 const reddit = require('./sources/reddit');
 const youtube = require('./sources/youtube');
 const serp = require('./sources/serpSearch');
@@ -24,39 +25,14 @@ const SOURCES = [
   { name: 'instagram_own', fetch: instagramOwned.fetchMentions }
 ];
 
-function escapeHtml(str) {
-  return String(str).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-}
-
-function mentionRowHtml(m) {
-  const title = escapeHtml(m.title || m.source);
-  const snippet = escapeHtml((m.snippet || '').slice(0, 300));
-  const reason = m.reason ? `<div style="color:#64748b;font-size:12px;margin-top:4px;">Why: ${escapeHtml(m.reason)}</div>` : '';
-  const link = m.url ? `<a href="${m.url}">${title}</a>` : title;
-  return `<div style="margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid #e2e8f0;">
-    <div style="font-size:11px;text-transform:uppercase;color:#64748b;">${escapeHtml(m.source)}${m.severity ? ` — ${escapeHtml(m.severity)} severity` : ''}</div>
-    <div style="font-weight:600;">${link}</div>
-    <div style="font-size:13px;color:#0f172a;">${snippet}</div>
-    ${reason}
-  </div>`;
-}
-
 async function sendUrgentAlert(urgentMentions) {
   if (urgentMentions.length === 0) return;
-  const html = `<h2>Urgent: ${urgentMentions.length} high-severity negative mention${urgentMentions.length > 1 ? 's' : ''} found</h2>
-    <p>Found in today's Melbourne Airport mentions run. Recommend reviewing and responding directly.</p>
-    ${urgentMentions.map(mentionRowHtml).join('')}`;
-  await sendEmail({ subject: `⚠️ ${urgentMentions.length} urgent negative mention(s) -- Melbourne Airport`, html });
+  await sendEmail(renderUrgentAlert(urgentMentions));
   for (const m of urgentMentions) await markAlerted(m.id);
 }
 
 async function sendDailyDigest(negativeMentions) {
-  const html = negativeMentions.length === 0
-    ? `<h2>Melbourne Airport mentions -- daily digest</h2><p>No negative mentions found today.</p>`
-    : `<h2>Melbourne Airport mentions -- daily digest</h2>
-       <p>${negativeMentions.length} negative mention${negativeMentions.length > 1 ? 's' : ''} found today across all sources (all of today's checks combined).</p>
-       ${negativeMentions.map(mentionRowHtml).join('')}`;
-  await sendEmail({ subject: `Daily negative mentions digest -- ${negativeMentions.length} found`, html });
+  await sendEmail(renderDailyDigest(negativeMentions));
 }
 
 // The dashboard/DB refreshes on every scheduled run (currently 3x/day), but

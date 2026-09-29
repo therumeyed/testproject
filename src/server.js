@@ -5,6 +5,8 @@ const { pool, initSchemaWithRetry, setManualCategory, getUnclassifiedMentions, g
 const { classifyMentions } = require('./sentiment');
 const { CATEGORIES, CATEGORY_VALUES } = require('./categories');
 const { parseFilters, buildWhere, previousPeriod } = require('./filters');
+const { sendEmail } = require('./email');
+const { renderUrgentAlert, renderDailyDigest } = require('./emailTemplates');
 
 const app = express();
 app.use(express.static(path.join(__dirname, '..', 'public')));
@@ -219,6 +221,27 @@ app.post('/admin/reset-mentions', express.json(), requireAdmin, async (req, res)
   const before = await pool.query('SELECT count(*) FROM mentions');
   await pool.query('TRUNCATE TABLE mentions, ingest_runs RESTART IDENTITY');
   res.json({ ok: true, mentionsDeleted: Number(before.rows[0].count) });
+});
+
+// Sends a sample urgent alert + daily digest to ALERT_EMAIL_TO with made-up
+// mentions, so email formatting can be checked against a real inbox (Gmail,
+// Outlook, etc. all render HTML slightly differently) without waiting for
+// real negative mentions or the next scheduled ingest run.
+const SAMPLE_MENTION = {
+  source: 'google_reviews',
+  title: 'Melbourne Airport — 1★',
+  snippet: 'Parking fees are expensive and confusing which car park to use.',
+  url: 'https://melairmentions.brandassistant.app/',
+  severity: 'high',
+  category: 'parking',
+  reason: 'This is a sample mention sent to preview email formatting -- not a real finding.'
+};
+app.post('/admin/test-email', express.json(), requireAdmin, async (req, res) => {
+  if (!process.env.RESEND_API_KEY) return res.status(400).json({ error: 'RESEND_API_KEY not set' });
+  if (!process.env.ALERT_EMAIL_TO) return res.status(400).json({ error: 'ALERT_EMAIL_TO not set' });
+  await sendEmail(renderUrgentAlert([SAMPLE_MENTION]));
+  await sendEmail(renderDailyDigest([SAMPLE_MENTION, { ...SAMPLE_MENTION, severity: 'medium', category: 'terminal_experience', title: 'Melbourne Airport — 3★', snippet: 'Long queues at security this morning.' }]));
+  res.json({ ok: true, sentTo: process.env.ALERT_EMAIL_TO.split(',').map((s) => s.trim()).filter(Boolean) });
 });
 
 // Manual category override -- category_source='manual' rows are excluded
