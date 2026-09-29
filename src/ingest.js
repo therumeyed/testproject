@@ -1,8 +1,9 @@
 require('dotenv').config();
-const { pool, initSchemaWithRetry, insertMentions, updateSentiment, markAlerted, getTodaysNegativeMentions } = require('./db');
+const { pool, initSchemaWithRetry, insertMentions, updateSentiment, markAlerted, getTodaysNegativeMentions, replaceTrendQueries } = require('./db');
 const { classifyMentions } = require('./sentiment');
 const { sendEmail } = require('./email');
 const { renderUrgentAlert, renderDailyDigest } = require('./emailTemplates');
+const { fetchBreakoutQueries } = require('./trends');
 const reddit = require('./sources/reddit');
 const youtube = require('./sources/youtube');
 const serp = require('./sources/serpSearch');
@@ -109,6 +110,19 @@ async function run() {
     }
   } catch (err) {
     console.error('Classification/alerting failed:', err.message);
+  }
+
+  // Once/day (same gate as the digest) -- an unofficial, best-effort scrape
+  // (see src/trends.js for why), isolated so any failure here can never
+  // affect real mention ingestion or the emails above.
+  if (isDigestRun()) {
+    try {
+      const breakoutQueries = await fetchBreakoutQueries();
+      await replaceTrendQueries(breakoutQueries);
+      console.log(`[trends] stored ${breakoutQueries.length} significant rising/breakout queries.`);
+    } catch (err) {
+      console.error('[trends] fetch failed (non-fatal):', err.message);
+    }
   }
 
   await pool.end();

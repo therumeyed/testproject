@@ -41,7 +41,9 @@ const state = {
   density: 'comfortable',
   trendMode: 'volume',
   analytics: null,
-  mentionsResp: null
+  mentionsResp: null,
+  wordCloud: null,
+  trends: null
 };
 
 function readStateFromUrl() {
@@ -130,6 +132,7 @@ function render() {
     renderCategoryBars,
     renderCategoryDetail,
     renderWordCloud,
+    renderTrends,
     renderSourceBars,
     renderWatchNote,
     renderMentions
@@ -148,6 +151,7 @@ function applyViewVisibility() {
   document.getElementById('kpis').hidden = v === 'mentions' || v === 'categories' || v === 'sources' || v === 'settings';
   document.getElementById('overviewGrid').hidden = v !== 'overview';
   document.getElementById('wordCloudSection').hidden = v !== 'overview';
+  document.getElementById('trendsSection').hidden = v !== 'overview';
   document.getElementById('mentionsSection').hidden = v === 'categories' || v === 'sources' || v === 'settings';
   document.getElementById('categoriesSection').hidden = v !== 'categories';
   document.getElementById('sourcesSection').hidden = v !== 'sources';
@@ -362,6 +366,39 @@ function renderWordCloud() {
     const size = Math.round(MIN_PX + t * (MAX_PX - MIN_PX));
     return `<span class="wordtag" style="font-size:${size}px;" title="${w.count} mention${w.count > 1 ? 's' : ''}">${escapeHtml(w.word)}</span>`;
   }).join('');
+}
+
+// Independent of the dashboard's own filters (see loadTrends) -- always
+// shows the latest daily fetch, which can legitimately be empty/unavailable
+// on any given day since this is a best-effort, unofficial data source.
+function renderTrends() {
+  const data = state.trends;
+  const list = document.getElementById('trendsList');
+  const empty = document.getElementById('trendsEmpty');
+  const subtitle = document.getElementById('trendsSubtitle');
+  if (!data) return;
+
+  const themes = (data.themes || []).filter((t) => t.queries.length > 0);
+  empty.hidden = themes.length > 0;
+  list.hidden = themes.length === 0;
+
+  if (data.fetchedAt) {
+    const when = new Date(data.fetchedAt).toLocaleString('en-AU', { timeZone: 'Australia/Melbourne', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
+    subtitle.textContent = `Google searches that spiked in the last 7 days, around Melbourne Airport parking/pickup/drop-off — last checked ${when} (best-effort, may be unavailable some days)`;
+  }
+
+  if (themes.length === 0) { list.innerHTML = ''; return; }
+
+  list.innerHTML = themes.map((t) => `
+    <div>
+      <div class="trend-theme-label">${escapeHtml(t.theme)}</div>
+      <div class="trend-chips">${t.queries.map((q) => `
+        <a class="trend-chip" href="${escapeHtml(q.link || `https://trends.google.com/trends/explore?q=${encodeURIComponent(q.query)}&geo=AU`)}" target="_blank" rel="noopener">
+          ${escapeHtml(q.query)}
+          <span class="badge ${q.isBreakout ? 'breakout' : 'rising'}">${q.isBreakout ? 'Breakout' : `+${q.changePct}%`}</span>
+        </a>`).join('')}
+      </div>
+    </div>`).join('');
 }
 
 function renderSourceBars() {
@@ -693,6 +730,19 @@ function wireEvents() {
   });
 }
 
+// Not affected by the dashboard's date/category/sentiment/source filters --
+// it's always just "the latest daily Trends fetch", not a range query over
+// mentions -- so it loads once at startup rather than on every loadAll().
+async function loadTrends() {
+  try {
+    state.trends = await fetch('/api/trends').then((r) => r.json());
+  } catch (err) {
+    console.error('Failed to load trends:', err);
+  }
+  render();
+}
+
 readStateFromUrl();
 wireEvents();
 loadAll();
+loadTrends();

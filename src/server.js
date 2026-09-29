@@ -1,7 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const path = require('path');
-const { pool, initSchemaWithRetry, setManualCategory, getUnclassifiedMentions, getMentionsNeedingCategoryBackfill, updateCategory } = require('./db');
+const { pool, initSchemaWithRetry, setManualCategory, getUnclassifiedMentions, getMentionsNeedingCategoryBackfill, updateCategory, getLatestTrendQueries } = require('./db');
 const { classifyMentions } = require('./sentiment');
 const { CATEGORIES, CATEGORY_VALUES } = require('./categories');
 const { parseFilters, buildWhere, previousPeriod } = require('./filters');
@@ -80,6 +80,25 @@ app.get('/api/word-cloud', async (req, res) => {
   const textRes = await pool.query(`SELECT title, snippet FROM mentions WHERE ${where}`, params);
   const texts = textRes.rows.map((r) => `${r.title || ''} ${r.snippet || ''}`);
   res.json({ total: textRes.rows.length, words: computeWordFrequencies(texts) });
+});
+
+// Rising/breakout Google Trends queries from the most recent daily fetch
+// (see src/trends.js) -- not filtered by the dashboard's usual date-range
+// filters, since it's always just "today's fetch", not a range query over
+// mentions. Can legitimately come back empty on a day the scrape failed or
+// found nothing significant; that's a normal outcome, not an error.
+app.get('/api/trends', async (req, res) => {
+  const rows = await getLatestTrendQueries();
+  const fetchedAt = rows[0]?.fetchedAt || null;
+  const byTheme = new Map();
+  for (const r of rows) {
+    if (!byTheme.has(r.theme)) byTheme.set(r.theme, []);
+    byTheme.get(r.theme).push({ query: r.query, changePct: r.changePct, isBreakout: r.isBreakout, link: r.link });
+  }
+  res.json({
+    fetchedAt,
+    themes: [...byTheme.entries()].map(([theme, queries]) => ({ theme, queries }))
+  });
 });
 
 // Powers every KPI card, the trend chart, and the category bars from one

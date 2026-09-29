@@ -71,6 +71,14 @@
   .wordcloud{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 12px;padding:6px 18px 22px;}
   .wordtag{color:var(--navy);font-weight:650;line-height:1.3;white-space:nowrap;cursor:default;}
   .wordtag:hover{color:var(--blue)}
+  .trends{padding:6px 18px 20px;display:flex;flex-direction:column;gap:14px}
+  .trend-theme-label{font-size:11px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--muted);margin-bottom:6px}
+  .trend-chips{display:flex;flex-wrap:wrap;gap:8px}
+  .trend-chip{display:inline-flex;align-items:center;gap:6px;background:#f8fafc;border:1px solid var(--line);border-radius:999px;padding:5px 12px;font-size:12.5px;color:var(--ink);text-decoration:none}
+  .trend-chip:hover{border-color:var(--blue)}
+  .trend-chip .badge{font-weight:700;font-size:11px;padding:1px 7px;border-radius:999px}
+  .trend-chip .badge.breakout{background:#ffeded;color:#ad2f2f}
+  .trend-chip .badge.rising{background:#eaf3ff;color:#145bbb}
   .catdetail{display:flex;flex-direction:column}
   .catdetailrow{display:grid;grid-template-columns:180px 1fr 78px 120px;gap:16px;align-items:center;padding:14px 0;border-top:1px solid var(--line);background:none;border-left:0;border-right:0;border-bottom:0;width:100%;text-align:left;cursor:pointer;color:inherit;font:inherit}
   .catdetailrow:first-child{border-top:0}
@@ -218,6 +226,14 @@
         </div>
         <div class="wordcloud" id="wordCloud"></div>
         <div class="empty" id="wordCloudEmpty" hidden style="padding:8px 18px 20px;">Not enough text in this period to build a word cloud.</div>
+      </section>
+
+      <section class="card" id="trendsSection" style="padding:0;">
+        <div class="panelhead">
+          <div><h2>Rising search queries</h2><p id="trendsSubtitle">Google searches around Melbourne Airport parking/pickup/drop-off that spiked in the last 7 days (best-effort, may be unavailable some days)</p></div>
+        </div>
+        <div class="trends" id="trendsList"></div>
+        <div class="empty" id="trendsEmpty" hidden style="padding:8px 18px 20px;">No significant rising or breakout queries found in the latest check.</div>
       </section>
 
       <section class="card mentions" id="mentionsSection">

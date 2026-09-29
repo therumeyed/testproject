@@ -44,6 +44,21 @@ async function initSchema() {
       new_count INTEGER,
       error TEXT
     );
+
+    -- Google Trends "rising"/"breakout" related queries, fetched once/day per
+    -- theme via an unofficial Apify scrape (see src/trends.js) -- there is no
+    -- official Trends API, so this data source is best-effort and can come
+    -- back empty on days the scrape fails or gets rate-limited.
+    CREATE TABLE IF NOT EXISTS trend_queries (
+      id SERIAL PRIMARY KEY,
+      theme TEXT NOT NULL,
+      query TEXT NOT NULL,
+      change_pct INTEGER,
+      is_breakout BOOLEAN NOT NULL DEFAULT false,
+      link TEXT,
+      fetched_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_trend_queries_fetched_at ON trend_queries(fetched_at);
   `);
 }
 
@@ -181,6 +196,38 @@ async function getTodaysNegativeMentions() {
   return res.rows;
 }
 
+// Replaces the previous day's rows in one transaction rather than
+// appending forever -- only the latest fetch is ever shown, so there is no
+// reason to keep older rows around (a fresh run also means a fresh try in
+// case yesterday's scrape partially failed).
+async function replaceTrendQueries(rows) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('TRUNCATE TABLE trend_queries');
+    for (const r of rows) {
+      await client.query(
+        `INSERT INTO trend_queries (theme, query, change_pct, is_breakout, link) VALUES ($1,$2,$3,$4,$5)`,
+        [r.theme, r.query, r.changePct ?? null, !!r.isBreakout, r.link || null]
+      );
+    }
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+async function getLatestTrendQueries() {
+  const res = await pool.query(
+    `SELECT theme, query, change_pct AS "changePct", is_breakout AS "isBreakout", link, fetched_at AS "fetchedAt"
+     FROM trend_queries ORDER BY theme ASC, is_breakout DESC, change_pct DESC NULLS LAST`
+  );
+  return res.rows;
+}
+
 module.exports = {
   pool,
   initSchema,
@@ -192,5 +239,7 @@ module.exports = {
   getMentionsNeedingCategoryBackfill,
   getUnclassifiedMentions,
   setManualCategory,
+  replaceTrendQueries,
+  getLatestTrendQueries,
   updateCategory
 };
