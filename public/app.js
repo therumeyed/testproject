@@ -17,7 +17,8 @@ const SOURCE_LABELS = {
   reddit: 'Reddit', youtube: 'YouTube', facebook_search: 'Facebook (search)',
   instagram_search: 'Instagram (search)', linkedin_search: 'LinkedIn (search)', web_search: 'Web',
   news_search: 'News', facebook_direct: 'Facebook (direct)', instagram_direct: 'Instagram (hashtag)',
-  google_reviews: 'Google reviews', facebook_own: 'Facebook (MelAir)', instagram_own: 'Instagram (MelAir)'
+  google_reviews: 'Google reviews', facebook_own: 'Facebook (MelAir)', instagram_own: 'Instagram (MelAir)',
+  google_alerts: 'Google Alerts'
 };
 const SOURCE_PALETTE = ['#1467e8', '#7257d5', '#e2924c', '#50a8a1', '#c4547a', '#55a86d', '#a96408', '#6145c3', '#0d9488', '#dc2626', '#0891b2', '#c026d3'];
 function sourceLabel(s) { return SOURCE_LABELS[s] || s; }
@@ -95,12 +96,14 @@ function apiQueryString(extra) {
 async function loadAll() {
   setLoading(true);
   try {
-    const [analyticsRes, mentionsRes] = await Promise.all([
+    const [analyticsRes, mentionsRes, wordCloudRes] = await Promise.all([
       fetch(`/api/analytics?${apiQueryString()}`).then((r) => r.json()),
-      fetch(`/api/mentions?${apiQueryString({ page: state.page, pageSize: state.pageSize })}`).then((r) => r.json())
+      fetch(`/api/mentions?${apiQueryString({ page: state.page, pageSize: state.pageSize })}`).then((r) => r.json()),
+      fetch(`/api/word-cloud?${apiQueryString()}`).then((r) => r.json())
     ]);
     state.analytics = analyticsRes;
     state.mentionsResp = mentionsRes;
+    state.wordCloud = wordCloudRes;
     render();
     document.getElementById('syncStatus').textContent = `Updated ${new Date().toLocaleTimeString('en-AU', { timeZone: 'Australia/Melbourne', hour: 'numeric', minute: '2-digit' })}`;
   } catch (err) {
@@ -126,6 +129,7 @@ function render() {
     renderChart,
     renderCategoryBars,
     renderCategoryDetail,
+    renderWordCloud,
     renderSourceBars,
     renderWatchNote,
     renderMentions
@@ -143,6 +147,7 @@ function applyViewVisibility() {
   const v = state.view;
   document.getElementById('kpis').hidden = v === 'mentions' || v === 'categories' || v === 'sources' || v === 'settings';
   document.getElementById('overviewGrid').hidden = v !== 'overview';
+  document.getElementById('wordCloudSection').hidden = v !== 'overview';
   document.getElementById('mentionsSection').hidden = v === 'categories' || v === 'sources' || v === 'settings';
   document.getElementById('categoriesSection').hidden = v !== 'categories';
   document.getElementById('sourcesSection').hidden = v !== 'sources';
@@ -333,6 +338,30 @@ function renderCategoryDetail() {
 
 function sentimentBarColor(s) {
   return { positive: '#14804a', neutral: '#c9d2df', negative: '#c43d3d', unclassified: '#dfe5ee' }[s];
+}
+
+// Simple flex-wrap tag list sized by frequency -- deliberately not a true
+// spiral/packed word cloud (no canvas layout library, no new dependency),
+// but the same at-a-glance read: bigger word = mentioned more often.
+function renderWordCloud() {
+  const data = state.wordCloud;
+  const container = document.getElementById('wordCloud');
+  const empty = document.getElementById('wordCloudEmpty');
+  if (!data) return;
+  const words = data.words || [];
+  empty.hidden = words.length > 0;
+  container.hidden = words.length === 0;
+  if (words.length === 0) { container.innerHTML = ''; return; }
+
+  const max = words[0].count;
+  const min = words[words.length - 1].count;
+  const MIN_PX = 13;
+  const MAX_PX = 30;
+  container.innerHTML = words.map((w) => {
+    const t = max > min ? (w.count - min) / (max - min) : 1;
+    const size = Math.round(MIN_PX + t * (MAX_PX - MIN_PX));
+    return `<span class="wordtag" style="font-size:${size}px;" title="${w.count} mention${w.count > 1 ? 's' : ''}">${escapeHtml(w.word)}</span>`;
+  }).join('');
 }
 
 function renderSourceBars() {

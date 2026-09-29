@@ -19,6 +19,8 @@ envVarGroups:
         sync: false
       - key: ANTHROPIC_API_KEY
         sync: false
+      - key: GOOGLE_ALERTS_RSS_URL
+        sync: false
       - key: RESEND_API_KEY
         sync: false
       - key: ALERT_EMAIL_TO

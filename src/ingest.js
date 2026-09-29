@@ -12,6 +12,7 @@ const facebookOwned = require('./sources/facebookOwned');
 const instagramOwned = require('./sources/instagramOwned');
 const googleReviews = require('./sources/googleReviews');
 const googleNews = require('./sources/googleNews');
+const googleAlerts = require('./sources/googleAlerts');
 
 const SOURCES = [
   { name: 'reddit', fetch: reddit.fetchMentions },
@@ -22,7 +23,8 @@ const SOURCES = [
   { name: 'instagram_direct', fetch: instagramSearch.fetchMentions },
   { name: 'google_reviews', fetch: googleReviews.fetchMentions },
   { name: 'facebook_own', fetch: facebookOwned.fetchMentions },
-  { name: 'instagram_own', fetch: instagramOwned.fetchMentions }
+  { name: 'instagram_own', fetch: instagramOwned.fetchMentions },
+  { name: 'google_alerts', fetch: googleAlerts.fetchMentions }
 ];
 
 async function sendUrgentAlert(urgentMentions) {

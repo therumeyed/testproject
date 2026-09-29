@@ -7,6 +7,7 @@ const { CATEGORIES, CATEGORY_VALUES } = require('./categories');
 const { parseFilters, buildWhere, previousPeriod } = require('./filters');
 const { sendEmail } = require('./email');
 const { renderUrgentAlert, renderDailyDigest } = require('./emailTemplates');
+const { computeWordFrequencies } = require('./wordFrequency');
 
 const app = express();
 app.use(express.static(path.join(__dirname, '..', 'public')));
@@ -64,6 +65,21 @@ app.get('/api/mentions', async (req, res) => {
     dataParams
   );
   res.json({ total: countRes.rows[0].total, page, pageSize, results: dataRes.rows });
+});
+
+// Word cloud: most-used non-generic/non-domain words across the currently
+// filtered mentions' title+snippet -- reuses the same parseFilters/buildWhere
+// pipeline as /api/mentions and /api/analytics so it always matches whatever
+// the rest of the dashboard is showing. Text is pulled once and counted in
+// Node (computeWordFrequencies) rather than in SQL, which is simplest at
+// this table's size and keeps the stopword list in one place, testable on
+// its own (see test/wordFrequency.test.js).
+app.get('/api/word-cloud', async (req, res) => {
+  const filters = parseFilters(req.query);
+  const { where, params } = buildWhere(filters, filters.from, filters.to);
+  const textRes = await pool.query(`SELECT title, snippet FROM mentions WHERE ${where}`, params);
+  const texts = textRes.rows.map((r) => `${r.title || ''} ${r.snippet || ''}`);
+  res.json({ total: textRes.rows.length, words: computeWordFrequencies(texts) });
 });
 
 // Powers every KPI card, the trend chart, and the category bars from one
