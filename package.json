@@ -10,7 +10,7 @@
     "start": "node src/server.js",
     "ingest": "node src/ingest.js",
     "backfill-categories": "node src/backfillCategories.js",
-    "test": "node --test"
+    "test": "node --test --test-concurrency=1"
   },
   "dependencies": {
     "dotenv": "^16.4.5",

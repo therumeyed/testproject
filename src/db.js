@@ -45,20 +45,72 @@ async function initSchema() {
       error TEXT
     );
 
-    -- Google Trends "rising"/"breakout" related queries, fetched once/day per
-    -- theme via an unofficial Apify scrape (see src/trends.js) -- there is no
-    -- official Trends API, so this data source is best-effort and can come
-    -- back empty on days the scrape fails or gets rate-limited.
-    CREATE TABLE IF NOT EXISTS trend_queries (
+    DROP TABLE IF EXISTS trend_queries;
+
+    -- Google Trends data via DataForSEO's Google Trends Explore API (see
+    -- src/trends.js and src/dataForSeoClient.js) -- there is no official
+    -- Trends API, so this is a paid third-party proxy over it, run on a
+    -- schedule (see ingest.js) rather than live per dashboard request.
+    --
+    -- Numeric interest-over-time observations, one row per keyword/date/
+    -- series. "series" keeps the daily-90-day and weekly-5-year fetches
+    -- fully separate: each is normalised by Google against its own request
+    -- window, so the same keyword+date can have two different, mutually
+    -- incomparable values depending which request it came from. Upserted by
+    -- (keyword, series, observation_date) so re-fetching the same window
+    -- corrects rather than duplicates.
+    CREATE TABLE IF NOT EXISTS trend_observations (
       id SERIAL PRIMARY KEY,
-      theme TEXT NOT NULL,
+      keyword TEXT NOT NULL,
+      series TEXT NOT NULL,
+      observation_date DATE NOT NULL,
+      value INTEGER,
+      fetched_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (keyword, series, observation_date)
+    );
+    CREATE INDEX IF NOT EXISTS idx_trend_observations_lookup ON trend_observations(keyword, series, observation_date);
+
+    -- Related-query snapshots (top + rising) per seed keyword per fetch --
+    -- appended rather than upserted, since each fetch is a fresh top-N list
+    -- rather than a continuous series; callers read the most recent
+    -- fetched_at per (seed_keyword, series) so a failed fetch just leaves
+    -- the previous snapshot in place rather than the panel going empty.
+    CREATE TABLE IF NOT EXISTS trend_related_queries (
+      id SERIAL PRIMARY KEY,
+      seed_keyword TEXT NOT NULL,
+      series TEXT NOT NULL,
+      query_type TEXT NOT NULL,
       query TEXT NOT NULL,
-      change_pct INTEGER,
+      value INTEGER,
       is_breakout BOOLEAN NOT NULL DEFAULT false,
-      link TEXT,
       fetched_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
-    CREATE INDEX IF NOT EXISTS idx_trend_queries_fetched_at ON trend_queries(fetched_at);
+    CREATE INDEX IF NOT EXISTS idx_trend_related_queries_lookup ON trend_related_queries(seed_keyword, series, fetched_at);
+
+    -- Raw API responses, kept for audit/debugging -- exactly what was
+    -- requested (keyword group, timeframe) and what came back, regardless
+    -- of whether it was later parsed successfully.
+    CREATE TABLE IF NOT EXISTS trends_raw_results (
+      id SERIAL PRIMARY KEY,
+      source TEXT NOT NULL DEFAULT 'dataforseo',
+      request_type TEXT NOT NULL,
+      keyword_group TEXT NOT NULL,
+      timeframe TEXT NOT NULL,
+      requested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      raw_result JSONB
+    );
+
+    -- One row per schedule ('daily', 'weekly') tracking the last attempt/
+    -- success so the dashboard can always show "Last updated [date]" from
+    -- the last successful fetch even when the most recent attempt (and its
+    -- one retry, handled in-process -- see ingest.js) both failed.
+    CREATE TABLE IF NOT EXISTS trends_fetch_status (
+      request_type TEXT PRIMARY KEY,
+      last_attempt_at TIMESTAMPTZ,
+      last_success_at TIMESTAMPTZ,
+      last_status_code INTEGER,
+      last_error TEXT
+    );
   `);
 }
 
@@ -196,36 +248,100 @@ async function getTodaysNegativeMentions() {
   return res.rows;
 }
 
-// Replaces the previous day's rows in one transaction rather than
-// appending forever -- only the latest fetch is ever shown, so there is no
-// reason to keep older rows around (a fresh run also means a fresh try in
-// case yesterday's scrape partially failed).
-async function replaceTrendQueries(rows) {
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    await client.query('TRUNCATE TABLE trend_queries');
-    for (const r of rows) {
-      await client.query(
-        `INSERT INTO trend_queries (theme, query, change_pct, is_breakout, link) VALUES ($1,$2,$3,$4,$5)`,
-        [r.theme, r.query, r.changePct ?? null, !!r.isBreakout, r.link || null]
-      );
-    }
-    await client.query('COMMIT');
-  } catch (err) {
-    await client.query('ROLLBACK');
-    throw err;
-  } finally {
-    client.release();
+// Upserts interest-over-time observations by (keyword, series,
+// observation_date) -- re-fetching the same window corrects existing rows
+// (value, fetched_at) instead of duplicating them.
+async function upsertTrendObservations(rows) {
+  for (const r of rows) {
+    await pool.query(
+      `INSERT INTO trend_observations (keyword, series, observation_date, value, fetched_at)
+       VALUES ($1,$2,$3,$4,now())
+       ON CONFLICT (keyword, series, observation_date)
+       DO UPDATE SET value = EXCLUDED.value, fetched_at = now()`,
+      [r.keyword, r.series, r.observationDate, r.value]
+    );
   }
 }
 
-async function getLatestTrendQueries() {
+// Ordered by date so callers can slice off the trailing N days for the
+// rolling-average calculations without re-sorting.
+async function getTrendObservations(series, keywords) {
   const res = await pool.query(
-    `SELECT theme, query, change_pct AS "changePct", is_breakout AS "isBreakout", link, fetched_at AS "fetchedAt"
-     FROM trend_queries ORDER BY theme ASC, is_breakout DESC, change_pct DESC NULLS LAST`
+    `SELECT keyword, observation_date AS "observationDate", value
+     FROM trend_observations WHERE series = $1 AND keyword = ANY($2::text[])
+     ORDER BY keyword ASC, observation_date ASC`,
+    [series, keywords]
   );
   return res.rows;
+}
+
+// Related-query snapshots are appended, not upserted (see schema comment),
+// all sharing one fetched_at so "the latest snapshot per seed" is
+// unambiguous even if individual inserts take a few milliseconds apart.
+async function insertTrendRelatedQueries(rows) {
+  if (rows.length === 0) return;
+  const fetchedAt = new Date();
+  for (const r of rows) {
+    await pool.query(
+      `INSERT INTO trend_related_queries (seed_keyword, series, query_type, query, value, is_breakout, fetched_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [r.seedKeyword, r.series, r.queryType, r.query, r.value ?? null, !!r.isBreakout, fetchedAt]
+    );
+  }
+  // Light retention -- these are point-in-time snapshots, not a series
+  // anyone needs full history of; keep the last 90 days per (seed, series)
+  // trivially bounded rather than growing forever.
+  await pool.query(`DELETE FROM trend_related_queries WHERE fetched_at < now() - interval '90 days'`);
+}
+
+// Only the most recent fetch per (seed_keyword, series) -- a failed fetch
+// simply leaves the prior snapshot as "most recent" rather than the panel
+// going empty.
+async function getLatestTrendRelatedQueries(series) {
+  const res = await pool.query(
+    `SELECT t.seed_keyword AS "seedKeyword", t.query_type AS "queryType", t.query,
+            t.value, t.is_breakout AS "isBreakout", t.fetched_at AS "fetchedAt"
+     FROM trend_related_queries t
+     INNER JOIN (
+       SELECT seed_keyword, max(fetched_at) AS max_fetched_at
+       FROM trend_related_queries WHERE series = $1
+       GROUP BY seed_keyword
+     ) latest ON latest.seed_keyword = t.seed_keyword AND latest.max_fetched_at = t.fetched_at
+     WHERE t.series = $1
+     ORDER BY t.seed_keyword ASC, t.is_breakout DESC, t.value DESC NULLS LAST`,
+    [series]
+  );
+  return res.rows;
+}
+
+async function insertTrendsRawResult({ requestType, keywordGroup, timeframe, rawResult }) {
+  await pool.query(
+    `INSERT INTO trends_raw_results (request_type, keyword_group, timeframe, raw_result) VALUES ($1,$2,$3,$4)`,
+    [requestType, keywordGroup, timeframe, JSON.stringify(rawResult)]
+  );
+}
+
+async function recordTrendsFetchAttempt({ requestType, success, statusCode, error }) {
+  await pool.query(
+    `INSERT INTO trends_fetch_status (request_type, last_attempt_at, last_success_at, last_status_code, last_error)
+     VALUES ($1, now(), CASE WHEN $2 THEN now() ELSE NULL END, $3, $4)
+     ON CONFLICT (request_type) DO UPDATE SET
+       last_attempt_at = now(),
+       last_success_at = CASE WHEN $2 THEN now() ELSE trends_fetch_status.last_success_at END,
+       last_status_code = $3,
+       last_error = $4`,
+    [requestType, success, statusCode ?? null, error || null]
+  );
+}
+
+async function getTrendsFetchStatus(requestType) {
+  const res = await pool.query(
+    `SELECT request_type AS "requestType", last_attempt_at AS "lastAttemptAt", last_success_at AS "lastSuccessAt",
+            last_status_code AS "lastStatusCode", last_error AS "lastError"
+     FROM trends_fetch_status WHERE request_type = $1`,
+    [requestType]
+  );
+  return res.rows[0] || null;
 }
 
 module.exports = {
@@ -239,7 +355,12 @@ module.exports = {
   getMentionsNeedingCategoryBackfill,
   getUnclassifiedMentions,
   setManualCategory,
-  replaceTrendQueries,
-  getLatestTrendQueries,
+  upsertTrendObservations,
+  getTrendObservations,
+  insertTrendRelatedQueries,
+  getLatestTrendRelatedQueries,
+  insertTrendsRawResult,
+  recordTrendsFetchAttempt,
+  getTrendsFetchStatus,
   updateCategory
 };

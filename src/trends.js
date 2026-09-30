@@ -1,86 +1,187 @@
-// Google Trends has no official API -- the explore/related-queries data
-// only exists via Trends' own undocumented internal endpoints. A direct,
-// unproxied request to those endpoints was tested live from this project's
-// own dev environment and came back HTTP 429 on the very first request:
-// Google Trends is well known for aggressively blocking datacenter/cloud IP
-// ranges, which is exactly what a server's outbound IP looks like. So this
-// goes through Apify (the same infrastructure every other scraped source in
-// this project already depends on) instead of calling Trends directly.
-//
-// Even via Apify this stays best-effort: the actor's own 30-day run stats
-// show roughly a quarter of runs end FAILED or TIMED-OUT. Every caller here
-// must treat an empty/missing result as normal, not an error worth alerting
-// on, and this must never be allowed to affect real mention ingestion.
-const { runActor } = require('./apifyClient');
+// Google Trends data via DataForSEO's Google Trends Explore API -- replaces
+// an earlier direct-scrape approach that got blocked outright (a raw
+// request from this project's own dev environment returned HTTP 429 on the
+// very first try) and a subsequent Apify-actor approach. DataForSEO is a
+// paid, documented, task-based API: POST a task, poll for completion, GET
+// the result (see src/dataForSeoClient.js). Never calls trends.google.com
+// directly.
+const { runTasks } = require('./dataForSeoClient');
+const {
+  upsertTrendObservations,
+  insertTrendRelatedQueries,
+  insertTrendsRawResult,
+  recordTrendsFetchAttempt
+} = require('./db');
 
-const ACTOR_ID = process.env.APIFY_GOOGLE_TRENDS_ACTOR_ID || 'apify/google-trends-scraper';
+const LOCATION = 'Australia';
+const LANGUAGE = 'English';
+const SEARCH_TYPE = 'web';
 
-const THEMES = [
-  { theme: 'Melbourne Airport (general)', term: '/m/01nflw' },
-  { theme: 'Parking', term: 'melbourne airport parking' },
-  { theme: 'Pickup', term: 'melbourne airport pickup' },
-  { theme: 'Drop-off', term: 'melbourne airport drop off' }
+// Grouped together in ONE interest-over-time request so Google normalises
+// them against each other (comparable within this group) -- Trends compare
+// mode allows up to 5 keywords.
+const KEYWORD_GROUP = [
+  'Melbourne Airport',
+  'Melbourne Airport parking',
+  'airport parking Melbourne',
+  'Melbourne Airport pickup',
+  'Melbourne Airport drop off'
 ];
 
-// Only surface what's actually worth a "quick daily update" -- doubled
-// search volume or more, or a literal breakout -- capped per theme so this
-// stays a short read rather than a dump of every related query Trends has.
-const MIN_CHANGE_PCT = 100;
-const MAX_PER_THEME = 5;
+// Related queries require exactly one seed keyword per request (DataForSEO:
+// "to obtain ... google_trends_queries_list items, specify no more than 1
+// keyword") -- "airport parking Melbourne" is dropped here since it's a
+// near-duplicate of "Melbourne Airport parking" and would surface
+// essentially the same related queries.
+const RELATED_QUERY_SEEDS = [
+  'Melbourne Airport',
+  'Melbourne Airport parking',
+  'Melbourne Airport pickup',
+  'Melbourne Airport drop off'
+];
 
-// Google's own UI shows the literal label "Breakout" in place of a percent
-// once the increase is large enough that a percentage is meaningless (a
-// query with ~zero prior baseline) -- treat that as "as high as this signal
-// goes", not a number.
-function isBreakoutItem(item) {
-  if (typeof item.formattedValue === 'string' && /breakout/i.test(item.formattedValue)) return true;
-  return typeof item.value !== 'number' && item.hasData !== false;
+// Each series is kept fully separate in storage and in every calculation --
+// see trendsCalculations.js -- because Google normalises each request's
+// scores against that request's own window, so e.g. daily_90d and
+// weekly_5y values for the same keyword+date are not comparable numbers.
+const SERIES = {
+  DAILY_INTEREST: 'daily_90d',
+  WEEKLY_INTEREST: 'weekly_5y',
+  // "Daily" here describes fetch cadence (once/day), not the time window --
+  // related queries aren't a time series. past_7_days is the standard
+  // "what's spiking right now" discovery window.
+  DAILY_RELATED: 'daily_7d',
+  WEEKLY_RELATED: 'weekly_12m'
+};
+
+function baseTaskFields(timeRange) {
+  return { location_name: LOCATION, language_name: LANGUAGE, type: SEARCH_TYPE, time_range: timeRange };
 }
 
-function normalizeItem(theme, item) {
-  return {
-    theme,
-    query: item.query,
-    changePct: typeof item.value === 'number' ? item.value : null,
-    isBreakout: isBreakoutItem(item),
-    link: item.link ? `https://trends.google.com${item.link}` : null
-  };
+function buildInterestTask(timeRange) {
+  return { ...baseTaskFields(timeRange), keywords: KEYWORD_GROUP, item_types: ['google_trends_graph'] };
 }
 
-function extractSignificant(theme, risingItems) {
-  return (risingItems || [])
-    .map((item) => normalizeItem(theme, item))
-    .filter((r) => r.isBreakout || (r.changePct !== null && r.changePct >= MIN_CHANGE_PCT))
-    .sort((a, b) => Number(b.isBreakout) - Number(a.isBreakout) || (b.changePct || 0) - (a.changePct || 0))
-    .slice(0, MAX_PER_THEME);
+function buildRelatedQueryTask(seed, timeRange) {
+  return { ...baseTaskFields(timeRange), keywords: [seed], item_types: ['google_trends_queries_list'] };
 }
 
-async function fetchBreakoutQueries() {
-  if (!process.env.APIFY_TOKEN) {
-    console.log('[trends] skipped: APIFY_TOKEN not set');
-    return [];
+// A related query's "value" is a string that's either a plain percentage
+// (e.g. "1250" meaning +1250%) or the literal "Breakout" once the increase
+// is too large/undefined a baseline for a percentage to mean anything --
+// same convention Google's own UI uses.
+function parseRelatedQueryValue(raw) {
+  if (raw === null || raw === undefined) return { value: null, isBreakout: false };
+  if (typeof raw === 'number') return { value: raw, isBreakout: false };
+  const str = String(raw).trim();
+  if (/breakout/i.test(str)) return { value: null, isBreakout: true };
+  const num = Number(str.replace(/[,+%]/g, ''));
+  return Number.isFinite(num) ? { value: num, isBreakout: false } : { value: null, isBreakout: false };
+}
+
+// One row per keyword per date point in the graph -- `values[i]` lines up
+// positionally with `keywords[i]` on the SAME item (DataForSEO documents
+// this pairing explicitly), so this is safe, unlike matching across
+// separate API calls where positional trust would be misplaced.
+function parseInterestGraph(task, series) {
+  const result = task && task.result && task.result[0];
+  const item = result && (result.items || []).find((i) => i.type === 'google_trends_graph');
+  if (!item) return [];
+  const keywords = item.keywords || result.keywords || [];
+  const rows = [];
+  for (const point of item.data || []) {
+    if (point.missing_data) continue;
+    keywords.forEach((keyword, i) => {
+      const value = (point.values || [])[i];
+      if (typeof value === 'number') {
+        rows.push({ keyword, series, observationDate: point.date_from, value });
+      }
+    });
   }
+  return rows;
+}
 
-  const items = await runActor(ACTOR_ID, {
-    searchTerms: THEMES.map((t) => t.term),
-    isMultiple: false,
-    geo: 'AU',
-    timeRange: 'now 7-d'
-  });
-
-  const results = [];
-  for (const { theme, term } of THEMES) {
-    // Match each theme back to its own dataset item by the actor's own
-    // echoed search term -- never by array position, since nothing here
-    // guarantees the actor's output order matches the input order.
-    const datasetItem = (items || []).find((d) => d.searchTerm === term || d.inputUrlOrTerm === term);
-    if (!datasetItem) {
-      console.error(`[trends] no data returned for theme "${theme}" (term "${term}")`);
-      continue;
+function parseRelatedQueries(task, seedKeyword, series) {
+  const result = task && task.result && task.result[0];
+  const item = result && (result.items || []).find((i) => i.type === 'google_trends_queries_list');
+  if (!item || !item.data) return [];
+  const rows = [];
+  for (const queryType of ['top', 'rising']) {
+    for (const q of item.data[queryType] || []) {
+      const { value, isBreakout } = parseRelatedQueryValue(q.value);
+      rows.push({ seedKeyword, series, queryType, query: q.query, value, isBreakout });
     }
-    results.push(...extractSignificant(theme, datasetItem.relatedQueries_rising));
   }
-  return results;
+  return rows;
 }
 
-module.exports = { fetchBreakoutQueries, extractSignificant, normalizeItem, isBreakoutItem, THEMES };
+// One task_post call carrying the grouped interest-over-time task plus one
+// related-query task per seed -- fewer round trips, and DataForSEO bills
+// per task either way so batching doesn't change cost.
+async function runFetch({ requestType, interestSeries, interestTimeRange, relatedSeries, relatedTimeRange }) {
+  try {
+    const tasks = [
+      buildInterestTask(interestTimeRange),
+      ...RELATED_QUERY_SEEDS.map((seed) => buildRelatedQueryTask(seed, relatedTimeRange))
+    ];
+    const [interestResult, ...relatedResults] = await runTasks(tasks);
+
+    const observations = parseInterestGraph(interestResult, interestSeries);
+    await upsertTrendObservations(observations);
+    await insertTrendsRawResult({
+      requestType: `${requestType}_interest`,
+      keywordGroup: KEYWORD_GROUP.join(', '),
+      timeframe: interestTimeRange,
+      rawResult: interestResult
+    });
+
+    const relatedRows = RELATED_QUERY_SEEDS.flatMap((seed, i) => parseRelatedQueries(relatedResults[i], seed, relatedSeries));
+    await insertTrendRelatedQueries(relatedRows);
+    await insertTrendsRawResult({
+      requestType: `${requestType}_related`,
+      keywordGroup: RELATED_QUERY_SEEDS.join(', '),
+      timeframe: relatedTimeRange,
+      rawResult: relatedResults
+    });
+
+    await recordTrendsFetchAttempt({ requestType, success: true });
+    return { observations: observations.length, relatedQueries: relatedRows.length };
+  } catch (err) {
+    console.error(`[trends] ${requestType} fetch failed: ${err.statusCode ?? ''} ${err.statusMessage || err.message}`);
+    await recordTrendsFetchAttempt({ requestType, success: false, statusCode: err.statusCode, error: err.message });
+    throw err;
+  }
+}
+
+function fetchDailyData() {
+  return runFetch({
+    requestType: 'daily',
+    interestSeries: SERIES.DAILY_INTEREST,
+    interestTimeRange: 'past_90_days',
+    relatedSeries: SERIES.DAILY_RELATED,
+    relatedTimeRange: 'past_7_days'
+  });
+}
+
+function fetchWeeklyData() {
+  return runFetch({
+    requestType: 'weekly',
+    interestSeries: SERIES.WEEKLY_INTEREST,
+    interestTimeRange: 'past_5_years',
+    relatedSeries: SERIES.WEEKLY_RELATED,
+    relatedTimeRange: 'past_12_months'
+  });
+}
+
+module.exports = {
+  KEYWORD_GROUP,
+  RELATED_QUERY_SEEDS,
+  SERIES,
+  buildInterestTask,
+  buildRelatedQueryTask,
+  parseRelatedQueryValue,
+  parseInterestGraph,
+  parseRelatedQueries,
+  fetchDailyData,
+  fetchWeeklyData
+};

@@ -1,13 +1,18 @@
 require('dotenv').config();
 const express = require('express');
 const path = require('path');
-const { pool, initSchemaWithRetry, setManualCategory, getUnclassifiedMentions, getMentionsNeedingCategoryBackfill, updateCategory, getLatestTrendQueries } = require('./db');
+const {
+  pool, initSchemaWithRetry, setManualCategory, getUnclassifiedMentions, getMentionsNeedingCategoryBackfill,
+  updateCategory, getTrendObservations, getLatestTrendRelatedQueries, getTrendsFetchStatus
+} = require('./db');
 const { classifyMentions } = require('./sentiment');
 const { CATEGORIES, CATEGORY_VALUES } = require('./categories');
 const { parseFilters, buildWhere, previousPeriod } = require('./filters');
 const { sendEmail } = require('./email');
 const { renderUrgentAlert, renderDailyDigest } = require('./emailTemplates');
 const { computeWordFrequencies } = require('./wordFrequency');
+const { KEYWORD_GROUP, RELATED_QUERY_SEEDS, SERIES } = require('./trends');
+const { computeSeriesStats, computeYoY } = require('./trendsCalculations');
 
 const app = express();
 app.use(express.static(path.join(__dirname, '..', 'public')));
@@ -92,22 +97,84 @@ app.get('/api/word-cloud', async (req, res) => {
   res.json({ total: textRes.rows.length, words: computeWordFrequencies(texts) });
 });
 
-// Rising/breakout Google Trends queries from the most recent daily fetch
-// (see src/trends.js) -- not filtered by the dashboard's usual date-range
-// filters, since it's always just "today's fetch", not a range query over
-// mentions. Can legitimately come back empty on a day the scrape failed or
-// found nothing significant; that's a normal outcome, not an error.
+// A related query with either a literal "Breakout" (Google's own label,
+// value unknowable) or at least 1000% growth -- the explicit "grew by 1000%"
+// signal this panel exists to surface, distinct from the more generic
+// "significant rise" threshold used for the general emerging-searches list.
+const MASSIVE_GROWTH_PCT = 1000;
+
+// Not filtered by the dashboard's usual search/category/sentiment/date
+// filters -- this is Google Trends search-demand data, not a query over the
+// mentions table, so "today's/this week's latest fetch" is the only
+// meaningful scope. Every section always returns the last successful fetch
+// (see src/trends.js's retry/fallback handling) with its own lastUpdated
+// timestamp -- never an empty result just because the most recent attempt
+// failed; `stale: true` flags that case so the UI can note it quietly
+// without hiding the still-valid data underneath.
 app.get('/api/trends', async (req, res) => {
-  const rows = await getLatestTrendQueries();
-  const fetchedAt = rows[0]?.fetchedAt || null;
-  const byTheme = new Map();
-  for (const r of rows) {
-    if (!byTheme.has(r.theme)) byTheme.set(r.theme, []);
-    byTheme.get(r.theme).push({ query: r.query, changePct: r.changePct, isBreakout: r.isBreakout, link: r.link });
+  const [dailyObs, weeklyObs, dailyRelated, dailyStatus, weeklyStatus] = await Promise.all([
+    getTrendObservations(SERIES.DAILY_INTEREST, KEYWORD_GROUP),
+    getTrendObservations(SERIES.WEEKLY_INTEREST, KEYWORD_GROUP),
+    getLatestTrendRelatedQueries(SERIES.DAILY_RELATED),
+    getTrendsFetchStatus('daily'),
+    getTrendsFetchStatus('weekly')
+  ]);
+
+  const groupByKeyword = (rows) => {
+    const map = new Map();
+    for (const o of rows) {
+      if (!map.has(o.keyword)) map.set(o.keyword, []);
+      map.get(o.keyword).push(o);
+    }
+    return map;
+  };
+  const dailyByKeyword = groupByKeyword(dailyObs);
+  const weeklyByKeyword = groupByKeyword(weeklyObs);
+
+  const searchDemandSeries = KEYWORD_GROUP.map((keyword) => {
+    const obs = dailyByKeyword.get(keyword) || [];
+    return {
+      keyword,
+      observations: obs.map((o) => ({ date: o.observationDate, value: o.value })),
+      stats: computeSeriesStats(obs)
+    };
+  });
+
+  const seasonalitySeries = KEYWORD_GROUP.map((keyword) => {
+    const obs = weeklyByKeyword.get(keyword) || [];
+    return {
+      keyword,
+      observations: obs.map((o) => ({ date: o.observationDate, value: o.value })),
+      yoy: computeYoY(obs)
+    };
+  });
+
+  const risingByTheme = new Map();
+  for (const r of dailyRelated) {
+    if (r.queryType !== 'rising') continue;
+    if (!risingByTheme.has(r.seedKeyword)) risingByTheme.set(r.seedKeyword, []);
+    risingByTheme.get(r.seedKeyword).push({
+      query: r.query,
+      value: r.value,
+      isBreakout: r.isBreakout,
+      isMassiveGrowth: r.isBreakout || (r.value !== null && r.value >= MASSIVE_GROWTH_PCT)
+    });
   }
+  const emergingThemes = RELATED_QUERY_SEEDS.map((seed) => ({
+    theme: seed,
+    queries: (risingByTheme.get(seed) || [])
+      .sort((a, b) => Number(b.isBreakout) - Number(a.isBreakout) || (b.value || 0) - (a.value || 0))
+  }));
+
+  const statusPayload = (status) => ({
+    lastUpdated: status?.lastSuccessAt || null,
+    stale: !!status && (!status.lastSuccessAt || (status.lastAttemptAt && new Date(status.lastAttemptAt) > new Date(status.lastSuccessAt)))
+  });
+
   res.json({
-    fetchedAt,
-    themes: [...byTheme.entries()].map(([theme, queries]) => ({ theme, queries }))
+    searchDemand: { ...statusPayload(dailyStatus), series: searchDemandSeries },
+    emergingSearches: { ...statusPayload(dailyStatus), themes: emergingThemes },
+    seasonality: { ...statusPayload(weeklyStatus), series: seasonalitySeries }
   });
 });
 

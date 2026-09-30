@@ -1,9 +1,9 @@
 require('dotenv').config();
-const { pool, initSchemaWithRetry, insertMentions, updateSentiment, markAlerted, getTodaysNegativeMentions, replaceTrendQueries } = require('./db');
+const { pool, initSchemaWithRetry, insertMentions, updateSentiment, markAlerted, getTodaysNegativeMentions } = require('./db');
 const { classifyMentions } = require('./sentiment');
 const { sendEmail } = require('./email');
 const { renderUrgentAlert, renderDailyDigest } = require('./emailTemplates');
-const { fetchBreakoutQueries } = require('./trends');
+const { fetchDailyData, fetchWeeklyData } = require('./trends');
 const reddit = require('./sources/reddit');
 const youtube = require('./sources/youtube');
 const serp = require('./sources/serpSearch');
@@ -50,6 +50,38 @@ function isDigestRun() {
     new Intl.DateTimeFormat('en-AU', { timeZone: 'Australia/Melbourne', hour: 'numeric', hour12: false }).format(new Date())
   );
   return hour >= 16;
+}
+
+// Weekly Trends fetches (5-year seasonality + 12-month related queries)
+// don't need to run more than once/week -- both change far slower than the
+// daily fetches, and running them daily would just multiply DataForSEO cost
+// for no benefit. Piggybacks on the same digest-time gate, restricted to
+// Mondays Melbourne time.
+function isWeeklyTrendsRun() {
+  if (!isDigestRun()) return false;
+  const weekday = new Intl.DateTimeFormat('en-AU', { timeZone: 'Australia/Melbourne', weekday: 'short' }).format(new Date());
+  return weekday === 'Mon';
+}
+
+// Attempts `fn`, and on failure waits 30 minutes and tries exactly once
+// more before giving up -- per spec ("retry once after 30 minutes"). Never
+// throws: a Trends failure (even after the retry) must never affect real
+// mention ingestion or the alert emails elsewhere in this run. `fn` itself
+// (see src/trends.js) already logs the DataForSEO status code/message and
+// records the failed attempt, so this only needs to add the retry timing.
+async function withOneRetry(fn, label) {
+  try {
+    await fn();
+  } catch (firstErr) {
+    console.error(`[trends] ${label} failed, retrying once in 30 minutes:`, firstErr.message);
+    await new Promise((r) => setTimeout(r, 30 * 60 * 1000));
+    try {
+      await fn();
+      console.log(`[trends] ${label} retry succeeded.`);
+    } catch (secondErr) {
+      console.error(`[trends] ${label} retry also failed, giving up until the next scheduled run:`, secondErr.message);
+    }
+  }
 }
 
 // Rolling 24h window, run once a day by the Render cron job. Each source
@@ -112,17 +144,15 @@ async function run() {
     console.error('Classification/alerting failed:', err.message);
   }
 
-  // Once/day (same gate as the digest) -- an unofficial, best-effort scrape
-  // (see src/trends.js for why), isolated so any failure here can never
-  // affect real mention ingestion or the emails above.
+  // Google Trends data via DataForSEO -- isolated from the rest of this run
+  // (a paid third-party API call that can fail independently of everything
+  // above) and from each other, so a failed weekly fetch can't skip/corrupt
+  // the daily one or vice versa. See src/trends.js for what each covers.
   if (isDigestRun()) {
-    try {
-      const breakoutQueries = await fetchBreakoutQueries();
-      await replaceTrendQueries(breakoutQueries);
-      console.log(`[trends] stored ${breakoutQueries.length} significant rising/breakout queries.`);
-    } catch (err) {
-      console.error('[trends] fetch failed (non-fatal):', err.message);
-    }
+    await withOneRetry(fetchDailyData, 'daily Trends fetch');
+  }
+  if (isWeeklyTrendsRun()) {
+    await withOneRetry(fetchWeeklyData, 'weekly Trends fetch');
   }
 
   await pool.end();

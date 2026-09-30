@@ -132,7 +132,9 @@ function render() {
     renderCategoryBars,
     renderCategoryDetail,
     renderWordCloud,
-    renderTrends,
+    renderSearchDemand,
+    renderEmergingSearches,
+    renderSeasonality,
     renderSourceBars,
     renderWatchNote,
     renderMentions
@@ -151,7 +153,9 @@ function applyViewVisibility() {
   document.getElementById('kpis').hidden = v === 'mentions' || v === 'categories' || v === 'sources' || v === 'settings';
   document.getElementById('overviewGrid').hidden = v !== 'overview';
   document.getElementById('wordCloudSection').hidden = v !== 'overview';
-  document.getElementById('trendsSection').hidden = v !== 'overview';
+  document.getElementById('searchDemandSection').hidden = v !== 'overview';
+  document.getElementById('emergingSearchesSection').hidden = v !== 'overview';
+  document.getElementById('seasonalitySection').hidden = v !== 'overview';
   document.getElementById('mentionsSection').hidden = v === 'categories' || v === 'sources' || v === 'settings';
   document.getElementById('categoriesSection').hidden = v !== 'categories';
   document.getElementById('sourcesSection').hidden = v !== 'sources';
@@ -368,37 +372,123 @@ function renderWordCloud() {
   }).join('');
 }
 
-// Independent of the dashboard's own filters (see loadTrends) -- always
-// shows the latest daily fetch, which can legitimately be empty/unavailable
-// on any given day since this is a best-effort, unofficial data source.
-function renderTrends() {
-  const data = state.trends;
-  const list = document.getElementById('trendsList');
-  const empty = document.getElementById('trendsEmpty');
-  const subtitle = document.getElementById('trendsSubtitle');
+// Google Trends data (via DataForSEO -- see src/trends.js), independent of
+// the dashboard's own search/category/sentiment/date filters since it's not
+// a query over mentions. Every section always renders the last successful
+// fetch with its own "Last updated" timestamp -- never emptied out just
+// because the most recent attempt failed (see src/trends.js's retry/
+// fallback handling); `stale` quietly flags that case instead.
+function renderTrendsUpdated(elId, data) {
+  const el = document.getElementById(elId);
+  if (!data) { el.textContent = ''; return; }
+  el.classList.toggle('stale', !!data.stale);
+  if (!data.lastUpdated) { el.textContent = 'Not yet available'; return; }
+  const when = new Date(data.lastUpdated).toLocaleString('en-AU', { timeZone: 'Australia/Melbourne', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
+  el.textContent = data.stale ? `Last updated ${when} (having trouble refreshing)` : `Last updated ${when}`;
+}
+
+const TREND_CHART_PALETTE = ['#1467e8', '#7257d5', '#e2924c', '#50a8a1', '#c4547a'];
+
+function renderTrendLineChart(existingChart, canvasId, series, dateLabelOpts) {
+  const canvas = document.getElementById(canvasId);
+  const seriesWithData = series.filter((s) => s.observations.length > 0);
+  if (typeof Chart === 'undefined') {
+    canvas.closest('.chart-wrap').innerHTML = '<p class="chart-unavailable">Chart could not load.</p>';
+    return null;
+  }
+  if (seriesWithData.length === 0) return existingChart;
+
+  const labels = seriesWithData[0].observations.map((o) => new Date(o.date + 'T00:00:00').toLocaleDateString('en-AU', dateLabelOpts));
+  const datasets = seriesWithData.map((s, i) => ({
+    label: s.keyword,
+    data: s.observations.map((o) => o.value),
+    borderColor: TREND_CHART_PALETTE[i % TREND_CHART_PALETTE.length],
+    fill: false,
+    tension: 0.3,
+    pointRadius: 0
+  }));
+  if (existingChart) existingChart.destroy();
+  return new Chart(canvas.getContext('2d'), {
+    type: 'line',
+    data: { labels, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: { y: { beginAtZero: true, max: 100 } },
+      plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 11 } } } }
+    }
+  });
+}
+
+function wowArrow(pct) { return pct > 0 ? '▲' : pct < 0 ? '▼' : ''; }
+
+let searchDemandChart;
+function renderSearchDemand() {
+  const data = state.trends?.searchDemand;
+  renderTrendsUpdated('searchDemandUpdated', data);
+  if (!data) return;
+
+  searchDemandChart = renderTrendLineChart(searchDemandChart, 'searchDemandChart', data.series, { day: 'numeric', month: 'short' });
+
+  document.getElementById('searchDemandStats').innerHTML = data.series.map((s) => {
+    const st = s.stats;
+    if (!st || st.wowChangePct === null) {
+      return `<div class="trend-stat-row"><div class="kw">${escapeHtml(s.keyword)}</div><div class="wow">Not enough data yet</div><div></div></div>`;
+    }
+    return `<div class="trend-stat-row">
+      <div class="kw">${escapeHtml(s.keyword)}</div>
+      <div class="wow">${wowArrow(st.wowChangePct)} ${Math.abs(st.wowChangePct)}% WoW</div>
+      <div class="spike-pill ${st.spikeStatus}">${st.spikeStatus}</div>
+    </div>`;
+  }).join('');
+}
+
+function renderEmergingSearches() {
+  const data = state.trends?.emergingSearches;
+  renderTrendsUpdated('emergingSearchesUpdated', data);
+  const list = document.getElementById('emergingSearchesList');
+  const empty = document.getElementById('emergingSearchesEmpty');
   if (!data) return;
 
   const themes = (data.themes || []).filter((t) => t.queries.length > 0);
   empty.hidden = themes.length > 0;
   list.hidden = themes.length === 0;
-
-  if (data.fetchedAt) {
-    const when = new Date(data.fetchedAt).toLocaleString('en-AU', { timeZone: 'Australia/Melbourne', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
-    subtitle.textContent = `Google searches that spiked in the last 7 days, around Melbourne Airport parking/pickup/drop-off — last checked ${when} (best-effort, may be unavailable some days)`;
-  }
-
   if (themes.length === 0) { list.innerHTML = ''; return; }
 
   list.innerHTML = themes.map((t) => `
     <div>
       <div class="trend-theme-label">${escapeHtml(t.theme)}</div>
-      <div class="trend-chips">${t.queries.map((q) => `
-        <a class="trend-chip" href="${escapeHtml(q.link || `https://trends.google.com/trends/explore?q=${encodeURIComponent(q.query)}&geo=AU`)}" target="_blank" rel="noopener">
+      <div class="trend-chips">${t.queries.map((q) => {
+        const badgeCls = q.isMassiveGrowth ? 'massive' : (q.isBreakout ? 'breakout' : 'rising');
+        const badgeText = q.isBreakout ? 'Breakout' : `+${q.value}%`;
+        return `<a class="trend-chip" href="https://trends.google.com/trends/explore?q=${encodeURIComponent(q.query)}&geo=AU" target="_blank" rel="noopener">
           ${escapeHtml(q.query)}
-          <span class="badge ${q.isBreakout ? 'breakout' : 'rising'}">${q.isBreakout ? 'Breakout' : `+${q.changePct}%`}</span>
-        </a>`).join('')}
+          <span class="badge ${badgeCls}">${badgeText}</span>
+        </a>`;
+      }).join('')}
       </div>
     </div>`).join('');
+}
+
+let seasonalityChart;
+function renderSeasonality() {
+  const data = state.trends?.seasonality;
+  renderTrendsUpdated('seasonalityUpdated', data);
+  if (!data) return;
+
+  seasonalityChart = renderTrendLineChart(seasonalityChart, 'seasonalityChart', data.series, { day: 'numeric', month: 'short', year: '2-digit' });
+
+  document.getElementById('seasonalityStats').innerHTML = data.series.map((s) => {
+    const y = s.yoy;
+    if (!y || y.yoyChangePct === null) {
+      return `<div class="trend-stat-row"><div class="kw">${escapeHtml(s.keyword)}</div><div class="wow">Not enough history yet</div><div></div></div>`;
+    }
+    return `<div class="trend-stat-row">
+      <div class="kw">${escapeHtml(s.keyword)}</div>
+      <div class="wow">${wowArrow(y.yoyChangePct)} ${Math.abs(y.yoyChangePct)}% YoY</div>
+      <div></div>
+    </div>`;
+  }).join('');
 }
 
 function renderSourceBars() {

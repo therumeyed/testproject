@@ -79,6 +79,18 @@
   .trend-chip .badge{font-weight:700;font-size:11px;padding:1px 7px;border-radius:999px}
   .trend-chip .badge.breakout{background:#ffeded;color:#ad2f2f}
   .trend-chip .badge.rising{background:#eaf3ff;color:#145bbb}
+  .trend-chip .badge.massive{background:#c43d3d;color:#fff}
+  .trends-updated{font-size:11.5px;color:var(--muted);white-space:nowrap;padding-top:2px}
+  .trends-updated.stale{color:#a96408}
+  .trend-stat-rows{padding:2px 18px 18px;display:flex;flex-direction:column}
+  .trend-stat-row{display:grid;grid-template-columns:1fr 90px 140px;gap:14px;align-items:center;padding:10px 0;border-top:1px solid var(--line);font-size:12.5px}
+  .trend-stat-row:first-child{border-top:0}
+  .trend-stat-row .kw{font-weight:650;color:var(--ink)}
+  .trend-stat-row .wow{text-align:right;font-weight:700;color:var(--ink)}
+  .spike-pill{justify-self:end;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;padding:3px 9px;border-radius:999px}
+  .spike-pill.spike{background:#ffeded;color:#ad2f2f}
+  .spike-pill.decline{background:#eaf3ff;color:#145bbb}
+  .spike-pill.normal{background:#eef1f5;color:#556174}
   .catdetail{display:flex;flex-direction:column}
   .catdetailrow{display:grid;grid-template-columns:180px 1fr 78px 120px;gap:16px;align-items:center;padding:14px 0;border-top:1px solid var(--line);background:none;border-left:0;border-right:0;border-bottom:0;width:100%;text-align:left;cursor:pointer;color:inherit;font:inherit}
   .catdetailrow:first-child{border-top:0}
@@ -228,12 +240,31 @@
         <div class="empty" id="wordCloudEmpty" hidden style="padding:8px 18px 20px;">Not enough text in this period to build a word cloud.</div>
       </section>
 
-      <section class="card" id="trendsSection" style="padding:0;">
+      <section class="card" id="searchDemandSection">
         <div class="panelhead">
-          <div><h2>Rising search queries</h2><p id="trendsSubtitle">Google searches around Melbourne Airport parking/pickup/drop-off that spiked in the last 7 days (best-effort, may be unavailable some days)</p></div>
+          <div><h2>Search demand</h2><p>90-day Google search interest for Melbourne Airport parking, pickup and drop-off (Australia, web search)</p></div>
+          <div class="trends-updated" id="searchDemandUpdated"></div>
         </div>
-        <div class="trends" id="trendsList"></div>
-        <div class="empty" id="trendsEmpty" hidden style="padding:8px 18px 20px;">No significant rising or breakout queries found in the latest check.</div>
+        <div class="chart" style="padding:8px 18px 6px;"><div class="chart-wrap" style="height:220px;"><canvas id="searchDemandChart"></canvas></div></div>
+        <div class="trend-stat-rows" id="searchDemandStats"></div>
+      </section>
+
+      <section class="card" id="emergingSearchesSection" style="padding:0;">
+        <div class="panelhead">
+          <div><h2>Emerging searches</h2><p>Rising and breakout related Google searches, last 7 days</p></div>
+          <div class="trends-updated" id="emergingSearchesUpdated"></div>
+        </div>
+        <div class="trends" id="emergingSearchesList"></div>
+        <div class="empty" id="emergingSearchesEmpty" hidden style="padding:8px 18px 20px;">No significant rising or breakout queries in the latest check.</div>
+      </section>
+
+      <section class="card" id="seasonalitySection">
+        <div class="panelhead">
+          <div><h2>Seasonality</h2><p>5-year weekly search interest, with year-over-year comparison</p></div>
+          <div class="trends-updated" id="seasonalityUpdated"></div>
+        </div>
+        <div class="chart" style="padding:8px 18px 6px;"><div class="chart-wrap" style="height:220px;"><canvas id="seasonalityChart"></canvas></div></div>
+        <div class="trend-stat-rows" id="seasonalityStats"></div>
       </section>
 
       <section class="card mentions" id="mentionsSection">
