@@ -1,9 +1,12 @@
 // End-to-end test for GET /api/word-cloud against a real server + DB:
 // confirms it respects the same filters as /api/mentions and /api/analytics
-// (shared parseFilters/buildWhere), and that domain/generic stopwords are
-// excluded from what actually comes back over HTTP, not just in the pure
-// unit tests for computeWordFrequencies itself. Gated on TEST_DATABASE_URL
-// like the other DB-backed suites, so `npm test` never touches a real DB.
+// (shared parseFilters/buildWhere), that domain/generic stopwords are
+// excluded from what actually comes back over HTTP (not just in the pure
+// unit tests for computeWordFrequencies itself), and that neutral-sentiment
+// mentions are excluded from the corpus entirely -- added after a real
+// production word cloud came back dominated by generic aviation/news
+// vocabulary from neutral press coverage rather than sentiment-carrying
+// words. Gated on TEST_DATABASE_URL like the other DB-backed suites.
 const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
@@ -41,7 +44,8 @@ describe('GET /api/word-cloud (DB-backed, real server)', { skip }, () => {
        VALUES
        ('google_reviews','wc1','Melbourne Airport — 1★','Parking fees are expensive and confusing.','parking','negative',true,$1),
        ('reddit','wc2','','Staff were rude and the queue was confusing.','terminal_experience','negative',true,$1),
-       ('reddit','wc3','','Great staff, friendly and helpful experience.','terminal_experience','positive',true,$1)`,
+       ('reddit','wc3','','Great staff, friendly and helpful experience.','terminal_experience','positive',true,$1),
+       ('news_search','wc4','Qantas boeing aircraft jobs','General aviation industry coverage about airlines and passengers.','general_airport','neutral',true,$1)`,
       [now]
     );
   });
@@ -52,9 +56,9 @@ describe('GET /api/word-cloud (DB-backed, real server)', { skip }, () => {
     serverProcess.kill();
   });
 
-  test('returns word frequencies excluding domain/generic stopwords', async () => {
+  test('returns word frequencies excluding domain/generic stopwords, from only the positive/negative mentions', async () => {
     const data = await (await fetch(`${BASE}/api/word-cloud`)).json();
-    assert.equal(data.total, 3);
+    assert.equal(data.total, 3, 'the neutral wc4 mention must be excluded from the corpus entirely');
     const words = data.words.map((w) => w.word);
     assert.ok(words.includes('confusing'));
     assert.ok(words.includes('rude'));
@@ -62,6 +66,9 @@ describe('GET /api/word-cloud (DB-backed, real server)', { skip }, () => {
     assert.ok(!words.includes('melbourne'));
     assert.ok(!words.includes('airport'));
     assert.ok(!words.includes('parking'));
+    // words that only appear in the neutral news mention must not leak in
+    assert.ok(!words.includes('qantas'));
+    assert.ok(!words.includes('aviation'));
     const confusing = data.words.find((w) => w.word === 'confusing');
     assert.equal(confusing.count, 2);
   });

@@ -32,6 +32,26 @@ describe('computeWordFrequencies', () => {
     assert.ok(words.some((w) => w.word === 'poor'));
   });
 
+  // Reproduces exactly what a real production word cloud showed: dominated
+  // by generic aviation/travel-news vocabulary from Google News/Alerts/web
+  // search coverage rather than sentiment-carrying words, because that kind
+  // of press content is much higher-volume than genuine customer reviews.
+  test('excludes airline/aviation-industry and press-boilerplate noise', () => {
+    const words = computeWordFrequencies([
+      'Qantas and Jetstar airlines are checking available flight transfers for passengers this morning, follow for more travel information',
+      'Virgin and Emirates aviation news: Boeing aircraft jobs at the runway, book your city transfer today',
+      '#MelbourneAirport traveling in October, current photo of the manager, need a free check'
+    ]);
+    for (const noise of [
+      'qantas', 'jetstar', 'airlines', 'available', 'transfers', 'passengers', 'travel', 'follow',
+      'information', 'virgin', 'emirates', 'aviation', 'boeing', 'aircraft', 'jobs', 'runway', 'book',
+      'city', 'transfer', 'melbourneairport', 'traveling', 'october', 'current', 'photo', 'manager',
+      'need', 'free', 'check'
+    ]) {
+      assert.ok(!words.some((w) => w.word === noise), `expected "${noise}" to be excluded`);
+    }
+  });
+
   test('excludes short words below the minimum length', () => {
     const words = computeWordFrequencies(['bad bad bad car car car'], { minLength: 4 });
     assert.ok(!words.some((w) => w.word === 'bad'));

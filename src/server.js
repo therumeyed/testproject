@@ -74,10 +74,20 @@ app.get('/api/mentions', async (req, res) => {
 // Node (computeWordFrequencies) rather than in SQL, which is simplest at
 // this table's size and keeps the stopword list in one place, testable on
 // its own (see test/wordFrequency.test.js).
+//
+// Restricted to sentiment IN (positive, negative) on top of the shared
+// filters -- neutral mentions are dominated by wire-style news/press
+// coverage (Google News/Alerts, general web search results), which is much
+// higher-volume than genuine customer reviews and drowns the word counts in
+// generic industry vocabulary (airlines, aviation, qantas, boeing, runway)
+// rather than the sentiment-carrying words this panel exists to surface.
 app.get('/api/word-cloud', async (req, res) => {
   const filters = parseFilters(req.query);
   const { where, params } = buildWhere(filters, filters.from, filters.to);
-  const textRes = await pool.query(`SELECT title, snippet FROM mentions WHERE ${where}`, params);
+  const textRes = await pool.query(
+    `SELECT title, snippet FROM mentions WHERE ${where} AND sentiment IN ('positive', 'negative')`,
+    params
+  );
   const texts = textRes.rows.map((r) => `${r.title || ''} ${r.snippet || ''}`);
   res.json({ total: textRes.rows.length, words: computeWordFrequencies(texts) });
 });

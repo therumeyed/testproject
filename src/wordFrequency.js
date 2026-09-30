@@ -29,19 +29,30 @@ const GENERIC_STOPWORDS = new Set([
   'you', 'your', 'yours', 'yourself', 'yourselves',
   'im', 'ive', 'id', 'youre', 'youve', 'theyre', 'weve', 'hes', 'shes', 'wasn', 'aren', 'doesn', 'didn',
   'read', 'more', 'also', 'said', 'says', 'seemed', 'seem', 'one', 'two', 'three', 'first', 'today',
-  'us', 'new', 'news', 'via', 'com', 'www', 'http', 'https', 'amp', 'experience', 'coverage', 'throughout'
+  'us', 'new', 'news', 'via', 'com', 'www', 'http', 'https', 'amp', 'experience', 'coverage', 'throughout',
+  // Wire/press-style boilerplate that otherwise dominates word counts once
+  // general news coverage (not customer reviews) is in the mix.
+  'travel', 'traveling', 'travelling', 'check', 'time', 'available', 'information', 'jobs', 'city',
+  'need', 'free', 'make', 'current', 'morning', 'changes', 'photo', 'follow', 'book', 'manager',
+  'january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october',
+  'november', 'december'
 ]);
 
 // The airport's own recurring nouns -- these dominate raw word counts
 // without saying anything the category breakdown doesn't already show.
 const DOMAIN_STOPWORDS = new Set([
-  'melbourne', 'airport', 'airports', 'tullamarine', 'mel', 'australia', 'australian', 'victoria',
+  'melbourne', 'airport', 'airports', 'melbourneairport', 'tullamarine', 'mel', 'australia', 'australian', 'victoria',
   'flight', 'flights', 'plane', 'planes', 'terminal', 'terminals',
   'car', 'cars', 'park', 'parks', 'parking', 'parked',
   'train', 'trains', 'bus', 'buses', 'skybus',
   'taxi', 'taxis', 'uber', 'didi', 'rideshare', 'ride',
   'drop', 'off', 'pickup', 'pick', 'drive', 'driving', 'road',
-  'arrival', 'arrivals', 'departure', 'departures', 'domestic', 'international'
+  'arrival', 'arrivals', 'departure', 'departures', 'domestic', 'international',
+  // Airline/manufacturer brand names and generic aviation-industry nouns --
+  // topical (which airline/what kind of aircraft), not sentiment-carrying,
+  // and otherwise very common in general aviation news coverage.
+  'airline', 'airlines', 'airways', 'aviation', 'aircraft', 'runway', 'boeing', 'airbus',
+  'qantas', 'jetstar', 'virgin', 'emirates', 'transfer', 'transfers', 'passenger', 'passengers'
 ]);
 
 function tokenize(text) {
