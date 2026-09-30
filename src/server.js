@@ -11,7 +11,7 @@ const { parseFilters, buildWhere, previousPeriod } = require('./filters');
 const { sendEmail } = require('./email');
 const { renderUrgentAlert, renderDailyDigest } = require('./emailTemplates');
 const { computeWordFrequencies } = require('./wordFrequency');
-const { KEYWORD_GROUP, RELATED_QUERY_SEEDS, SERIES } = require('./trends');
+const { KEYWORD_GROUP, RELATED_QUERY_SEEDS, SERIES, fetchDailyData, fetchWeeklyData } = require('./trends');
 const { computeSeriesStats, computeYoY } = require('./trendsCalculations');
 
 const app = express();
@@ -354,6 +354,26 @@ app.post('/admin/test-email', express.json(), requireAdmin, async (req, res) => 
   await sendEmail(renderUrgentAlert([SAMPLE_MENTION]));
   await sendEmail(renderDailyDigest([SAMPLE_MENTION, { ...SAMPLE_MENTION, severity: 'medium', category: 'terminal_experience', title: 'Melbourne Airport — 3★', snippet: 'Long queues at security this morning.' }]));
   res.json({ ok: true, sentTo: process.env.ALERT_EMAIL_TO.split(',').map((s) => s.trim()).filter(Boolean) });
+});
+
+// On-demand DataForSEO fetch -- the scheduled ingest cron only runs the
+// daily fetch once/day (~4-5pm Melbourne) and the weekly one only on
+// Mondays, so this lets a freshly-added DATAFORSEO_LOGIN/PASSWORD be
+// verified against the real API immediately rather than waiting for the
+// next scheduled window. Can take a while (DataForSEO tasks are polled to
+// completion, several per call) -- this is a manual/diagnostic action, not
+// something the dashboard itself calls.
+app.post('/admin/trigger-trends-fetch', express.json(), requireAdmin, async (req, res) => {
+  if (!process.env.DATAFORSEO_LOGIN || !process.env.DATAFORSEO_PASSWORD) {
+    return res.status(400).json({ error: 'DATAFORSEO_LOGIN/DATAFORSEO_PASSWORD not set' });
+  }
+  const scope = req.query.scope === 'weekly' ? 'weekly' : 'daily';
+  try {
+    const result = scope === 'weekly' ? await fetchWeeklyData() : await fetchDailyData();
+    res.json({ ok: true, scope, ...result });
+  } catch (err) {
+    res.status(502).json({ ok: false, scope, statusCode: err.statusCode ?? null, error: err.message });
+  }
 });
 
 // Manual category override -- category_source='manual' rows are excluded
